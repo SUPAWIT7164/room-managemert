@@ -35,6 +35,7 @@ const selectedRoomId = ref(null)
 const selectedFloor = computed(() => route.query.floor)
 const selectedBuilding = computed(() => route.query.building)
 const selectedArea = computed(() => route.query.area)
+const selectedRoomFromQuery = computed(() => route.query.room)
 const showBuildingList = computed(() => !selectedFloor.value)
 const showFloorPlan = computed(() => selectedFloor.value && !selectedArea.value)
 const showRoomControl = computed(() => selectedFloor.value && selectedArea.value)
@@ -46,13 +47,64 @@ const filteredBuildings = computed(() => {
   return buildings.value.filter(building => building.name === 'อาคาร A')
 })
 
+// Get available floors for selected building
+const availableFloors = computed(() => {
+  if (!selectedBuilding.value) return []
+  const building = buildings.value.find(b => b.id === Number(selectedBuilding.value))
+  if (!building || !building.floors) return []
+  return building.floors.map(floor => ({
+    value: floor.floor,
+    title: `ชั้น ${floor.floor}`,
+  }))
+})
+
+// Get available rooms for selected building and floor
+const availableRooms = computed(() => {
+  if (!selectedBuilding.value || !selectedFloor.value) return []
+  
+  try {
+    // Get areas for this building and floor
+    const buildingId = Number(selectedBuilding.value)
+    const floorNumber = Number(selectedFloor.value)
+    
+    const currentFloorAreas = areas.value.filter(area => {
+      return area.building_id === buildingId && area.floor === floorNumber
+    })
+    
+    if (currentFloorAreas.length === 0) return []
+    
+    // Get rooms in these areas
+    const currentFloorRooms = rooms.value.filter(room => {
+      return currentFloorAreas.some(area => area.id === room.area_id)
+    })
+    
+    return currentFloorRooms.map(room => ({
+      value: room.id,
+      title: room.name || `ห้อง ${room.id}`,
+    }))
+  } catch (error) {
+    console.error('Error computing available rooms:', error)
+    return []
+  }
+})
+
 // Floor Plan Edit States
 const floorPlanEditMode = ref(false)
 const floorPlanAreas = ref([
   { id: 1, name: 'Zone A', icon: 'tabler-box', top: 15, left: 8, width: 25, height: 30 },
   { id: 2, name: 'Zone B', icon: 'tabler-layout-grid', top: 20, left: 38, width: 28, height: 40 },
   { id: 3, name: 'Zone C', icon: 'tabler-home', top: 25, left: 70, width: 22, height: 35 },
+  { id: 4, name: 'Zone D', icon: 'tabler-square', top: 55, left: 8, width: 25, height: 30 },
+  { id: 5, name: 'Zone E', icon: 'tabler-apps', top: 60, left: 38, width: 28, height: 25 },
 ])
+
+// Mapping between area names and specific room names (for areas not yet connected to database)
+const areaRoomMapping = {
+  'Zone B': 'ห้องประชุม Earth',
+  'Zone C': 'ห้องประชุม Jupiter',
+  'Zone D': 'ห้องประชุม Mars',
+  'Zone E': 'ห้องประชุม Venus',
+}
 const selectedAreaForEdit = ref(null)
 const editingAreaName = ref(null)
 const editingAreaNameValue = ref('')
@@ -71,15 +123,32 @@ const floorDeviceStates = ref({
   erv: []
 }) // Store device states for all rooms in floor/area
 
-// System Control Button Position and Size
+// System Control Button Position and Size (for single button - deprecated)
 const systemControlPosition = ref({ top: 20, right: 20 })
 const systemControlSize = ref({ width: 80, height: 80 }) // Icon circle size
 const draggingSystemControl = ref(false)
 const dragSystemControlStart = ref({ x: 0, y: 0, top: 0, right: 0 })
 const resizingSystemControl = ref(false)
 const resizeSystemControlStart = ref({ x: 0, y: 0, width: 0, height: 0 })
+
+// Per-room device states (for individual room control buttons)
+const roomDeviceStates = ref({}) // { roomId: { light: [], ac: [], erv: [] } }
+const loadingRoomStates = ref({}) // { roomId: true/false }
+
+// Per-room system control button positions
+const roomControlPositions = ref({}) // { roomId: { top: number, left: number } }
+const draggingRoomControl = ref(null) // roomId that is being dragged
+const dragRoomControlStart = ref({ x: 0, y: 0, top: 0, left: 0 })
 const allSystemsOn = computed(() => {
-  // Check if any device is on in the current floor/area
+  // If in room control view, use selected room's device states
+  if (showRoomControl.value && selectedRoomId.value) {
+    const hasLightOn = deviceStates.light && deviceStates.light.some(state => state === true)
+    const hasAcOn = deviceStates.ac && deviceStates.ac.some(state => state === true)
+    const hasErvOn = deviceStates.erv && deviceStates.erv.some(state => state === true)
+    return hasLightOn || hasAcOn || hasErvOn
+  }
+  
+  // Otherwise, check if any device is on in the current floor/area (for floor plan view)
   const lightStates = floorDeviceStates.value.light || []
   const acStates = floorDeviceStates.value.ac || []
   const ervStates = floorDeviceStates.value.erv || []
@@ -105,6 +174,56 @@ const allSystemsOn = computed(() => {
   
   return result
 })
+
+// Get rooms for each area in floor plan
+const areaRoomsMap = computed(() => {
+  const map = {}
+  if (!selectedBuilding.value || !selectedFloor.value) return map
+  
+  floorPlanAreas.value.forEach(area => {
+    let room = null
+    
+    // Check if area has room mapping
+    if (areaRoomMapping[area.name]) {
+      const roomName = areaRoomMapping[area.name]
+      room = rooms.value.find(r => r.name === roomName)
+    } else {
+      // Find room from database area
+      const dbArea = areas.value.find(a => {
+        const areaBuildingId = String(a.building_id)
+        const areaFloor = String(a.floor)
+        const buildingIdStr = String(selectedBuilding.value)
+        const floorNumberStr = String(selectedFloor.value)
+        return a.name === area.name && areaBuildingId === buildingIdStr && areaFloor === floorNumberStr
+      })
+      
+      if (dbArea) {
+        const areaRooms = rooms.value.filter(r => r.area_id === dbArea.id)
+        if (areaRooms.length > 0) {
+          room = areaRooms[0]
+        }
+      }
+    }
+    
+    if (room) {
+      map[area.id] = room
+    }
+  })
+  
+  return map
+})
+
+// Check if room's systems are on
+const isRoomSystemsOn = (roomId) => {
+  const states = roomDeviceStates.value[roomId]
+  if (!states) return false
+  
+  const hasLightOn = states.light && states.light.some(state => state === true || state === 1 || state === 'on')
+  const hasAcOn = states.ac && states.ac.some(state => state === true || state === 1 || state === 'on')
+  const hasErvOn = states.erv && states.erv.some(state => state === true || state === 1 || state === 'on')
+  
+  return hasLightOn || hasAcOn || hasErvOn
+}
 
 // Room Control States
 const showDeviceModal = ref(false)
@@ -186,6 +305,9 @@ const fetchBuildings = async () => {
     areas.value = areasResponse.data.data || []
     const allRooms = roomsResponse.data.data || []
     
+    // Store rooms in rooms.value for dropdown usage
+    rooms.value = allRooms
+    
     // Process data to add floor and room counts
     buildings.value = buildings.value.map(building => {
       const buildingAreas = areas.value.filter(area => area.building_id === building.id)
@@ -214,7 +336,7 @@ const fetchBuildings = async () => {
   }
 }
 
-// Fetch Rooms for control page
+// Fetch Rooms for control page (DEPRECATED - use fetchBuildings instead)
 const fetchRooms = async () => {
   loading.value = true
   try {
@@ -222,11 +344,14 @@ const fetchRooms = async () => {
     const allRooms = response.data.data || response.data || []
     rooms.value = allRooms
     
-    // Auto-select Mercury room if exists
-    const mercuryRoom = allRooms.find(r => r.name && r.name.toLowerCase().includes('mercury'))
-    if (mercuryRoom) {
-      selectedRoomId.value = mercuryRoom.id
-      loadRoomDevices()
+    // Don't auto-select room - respect query parameter instead
+    // Auto-select Mercury room only if no room is selected and no query parameter
+    if (!selectedRoomId.value && !selectedRoomFromQuery.value) {
+      const mercuryRoom = allRooms.find(r => r.name && r.name.toLowerCase().includes('mercury'))
+      if (mercuryRoom) {
+        selectedRoomId.value = mercuryRoom.id
+        loadRoomDevices()
+      }
     }
   } catch (error) {
     console.error('Error fetching rooms:', error)
@@ -975,19 +1100,100 @@ const selectFloor = (buildingId, floor) => {
   })
 }
 
-const selectArea = (areaName) => {
+const selectArea = async (areaName) => {
+  // Always load data from fetchBuildings (same as building list page)
+  await fetchBuildings()
+  
+  // Check if this area has a specific room mapping (for areas not yet connected to database)
+  let firstRoomId = null
+  
+  if (areaRoomMapping[areaName]) {
+    // Find room by name from mapping
+    const targetRoomName = areaRoomMapping[areaName]
+    const targetRoom = rooms.value.find(r => r.name === targetRoomName)
+    if (targetRoom) {
+      firstRoomId = targetRoom.id
+      console.log(`Area ${areaName} mapped to room ${targetRoomName} (ID: ${firstRoomId})`)
+    } else {
+      console.warn(`Room "${targetRoomName}" not found for area "${areaName}"`)
+    }
+  } else {
+    // Find the area from database
+    const targetArea = areas.value.find(a => {
+      const areaBuildingId = String(a.building_id)
+      const areaFloor = String(a.floor)
+      const buildingIdStr = String(selectedBuilding.value)
+      const floorNumberStr = String(selectedFloor.value)
+      return a.name === areaName && areaBuildingId === buildingIdStr && areaFloor === floorNumberStr
+    })
+    
+    // Find first room in this area
+    if (targetArea) {
+      const areaRooms = rooms.value.filter(room => room.area_id === targetArea.id)
+      if (areaRooms.length > 0) {
+        firstRoomId = areaRooms[0].id
+      }
+    }
+  }
+  
   router.push({
     name: 'rooms-control',
     query: {
       building: selectedBuilding.value,
       floor: selectedFloor.value,
       area: areaName,
+      room: firstRoomId,
     },
   })
-  // Check device states when area is selected
-  nextTick(() => {
-    checkFloorDeviceStates()
+  
+  // Load room devices if room is selected
+  if (firstRoomId) {
+    await nextTick()
+    selectedRoomId.value = firstRoomId
+    loadRoomDevices()
+  }
+}
+
+// Handle building dropdown change
+const handleBuildingChange = async (buildingId) => {
+  // Always load data from fetchBuildings (same as building list page)
+  await fetchBuildings()
+  
+  router.push({
+    name: 'rooms-control',
+    query: {
+      building: buildingId,
+    },
   })
+}
+
+// Handle floor dropdown change
+const handleFloorChange = async (floor) => {
+  // Always load data from fetchBuildings (same as building list page)
+  await fetchBuildings()
+  
+  router.push({
+    name: 'rooms-control',
+    query: {
+      building: selectedBuilding.value,
+      floor: floor,
+    },
+  })
+}
+
+// Handle room dropdown change
+const handleRoomChange = (roomId) => {
+  selectedRoomId.value = roomId
+  // Update URL with room
+  router.replace({
+    query: {
+      ...route.query,
+      room: roomId || undefined,
+    },
+  })
+  if (roomId) {
+    loadRoomDevices()
+  }
 }
 
 const backToFloorPlan = () => {
@@ -1342,6 +1548,184 @@ const toggleSystemControl = () => {
   showSystemControlDialog.value = true
 }
 
+// Load device states for a specific room
+const loadRoomDeviceStates = async (roomId) => {
+  if (!roomId || loadingRoomStates.value[roomId]) return
+  
+  loadingRoomStates.value[roomId] = true
+  try {
+    const response = await api.get(`/rooms/${roomId}/devices`)
+    const devices = response.data.data || response.data || {}
+    const deviceStates = devices.deviceStates || {}
+    
+    const states = {
+      light: [],
+      ac: [],
+      erv: []
+    }
+    
+    if (deviceStates.light && Array.isArray(deviceStates.light)) {
+      states.light = deviceStates.light.map(light => light.status === true || light.status === 1 || light.status === 'on')
+    }
+    
+    if (deviceStates.ac && Array.isArray(deviceStates.ac)) {
+      states.ac = deviceStates.ac.map(ac => ac.status === true || ac.status === 1 || ac.status === 'on')
+    }
+    
+    if (deviceStates.erv && Array.isArray(deviceStates.erv)) {
+      states.erv = deviceStates.erv.map(erv => erv.status === true || erv.status === 1 || erv.status === 'on')
+    }
+    
+    roomDeviceStates.value[roomId] = states
+  } catch (error) {
+    console.error(`Error loading device states for room ${roomId}:`, error)
+    roomDeviceStates.value[roomId] = { light: [], ac: [], erv: [] }
+  } finally {
+    loadingRoomStates.value[roomId] = false
+  }
+}
+
+// Toggle system control for a specific room
+const toggleRoomSystemControl = async (roomId) => {
+  const currentState = isRoomSystemsOn(roomId)
+  const newState = !currentState
+  
+  // Control all devices in the room
+  try {
+    const deviceTypes = ['light', 'ac', 'erv']
+    const controlPromises = deviceTypes.map(type => {
+      return api.post(`/rooms/${roomId}/devices/${type}`, {
+        status: newState
+      })
+    })
+    
+    await Promise.all(controlPromises)
+    
+    // Reload room device states
+    await loadRoomDeviceStates(roomId)
+  } catch (error) {
+    console.error(`Error toggling systems for room ${roomId}:`, error)
+  }
+}
+
+// Load device states for all rooms in floor plan
+const loadAllRoomDeviceStates = async () => {
+  const roomIds = Object.values(areaRoomsMap.value).map(room => room.id)
+  await Promise.all(roomIds.map(roomId => loadRoomDeviceStates(roomId)))
+  // Load button positions for all rooms
+  loadRoomControlPositions()
+}
+
+// Load room control button positions from localStorage
+const loadRoomControlPositions = () => {
+  if (!selectedBuilding.value || !selectedFloor.value) return
+  
+  const key = `roomControlPositions_${selectedBuilding.value}_${selectedFloor.value}`
+  const saved = localStorage.getItem(key)
+  
+  if (saved) {
+    try {
+      roomControlPositions.value = JSON.parse(saved)
+    } catch (error) {
+      console.error('Error loading room control positions:', error)
+    }
+  }
+  
+  // Initialize default positions for rooms that don't have saved positions
+  Object.values(areaRoomsMap.value).forEach(room => {
+    if (!roomControlPositions.value[room.id]) {
+      // Find area for this room
+      const area = floorPlanAreas.value.find(a => areaRoomsMap.value[a.id]?.id === room.id)
+      if (area) {
+        roomControlPositions.value[room.id] = {
+          top: area.top + area.height / 2 - 25,
+          left: area.left + area.width / 2 - 2
+        }
+      }
+    }
+  })
+}
+
+// Save room control button positions to localStorage
+const saveRoomControlPositions = () => {
+  if (!selectedBuilding.value || !selectedFloor.value) return
+  
+  const key = `roomControlPositions_${selectedBuilding.value}_${selectedFloor.value}`
+  localStorage.setItem(key, JSON.stringify(roomControlPositions.value))
+}
+
+// Get room control button position (percentage)
+const getRoomControlPosition = (roomId) => {
+  return roomControlPositions.value[roomId] || { top: 50, left: 50 }
+}
+
+// Start dragging a room control button
+const startDragRoomControl = (event, roomId) => {
+  if (!floorPlanEditMode.value) return
+  
+  event.stopPropagation()
+  event.preventDefault()
+  draggingRoomControl.value = roomId
+  
+  const position = getRoomControlPosition(roomId)
+  const container = document.querySelector('.floor-plan-container')
+  if (!container) return
+  
+  const containerRect = container.getBoundingClientRect()
+  const buttonElement = event.currentTarget
+  const buttonRect = buttonElement.getBoundingClientRect()
+  
+  dragRoomControlStart.value = {
+    x: event.clientX,
+    y: event.clientY,
+    top: (buttonRect.top - containerRect.top) / containerRect.height * 100,
+    left: (buttonRect.left - containerRect.left) / containerRect.width * 100,
+  }
+  
+  document.addEventListener('mousemove', (e) => onDragRoomControl(e, roomId))
+  document.addEventListener('mouseup', () => stopDragRoomControl(roomId))
+}
+
+const onDragRoomControl = (event, roomId) => {
+  if (!draggingRoomControl.value || draggingRoomControl.value !== roomId) return
+  
+  const container = document.querySelector('.floor-plan-container')
+  if (!container) return
+  
+  const containerRect = container.getBoundingClientRect()
+  const deltaX = event.clientX - dragRoomControlStart.value.x
+  const deltaY = event.clientY - dragRoomControlStart.value.y
+  
+  // Calculate new position in percentage
+  const buttonWidthPercent = 4 // Approximate button width as percentage
+  const buttonHeightPercent = 8 // Approximate button height as percentage
+  
+  const deltaXPercent = (deltaX / containerRect.width) * 100
+  const deltaYPercent = (deltaY / containerRect.height) * 100
+  
+  let newLeft = dragRoomControlStart.value.left + deltaXPercent
+  let newTop = dragRoomControlStart.value.top + deltaYPercent
+  
+  // Constrain to container bounds (0-100%)
+  newLeft = Math.max(0, Math.min(100 - buttonWidthPercent, newLeft))
+  newTop = Math.max(0, Math.min(100 - buttonHeightPercent, newTop))
+  
+  roomControlPositions.value[roomId] = {
+    top: newTop,
+    left: newLeft
+  }
+}
+
+const stopDragRoomControl = (roomId) => {
+  if (draggingRoomControl.value === roomId) {
+    draggingRoomControl.value = null
+    saveRoomControlPositions()
+  }
+  
+  document.removeEventListener('mousemove', (e) => onDragRoomControl(e, roomId))
+  document.removeEventListener('mouseup', () => stopDragRoomControl(roomId))
+}
+
 const closeSystemControlDialog = () => {
   showSystemControlDialog.value = false
   systemControlAction.value = null
@@ -1611,15 +1995,62 @@ watch(() => route.query, async () => {
   console.log('showRoomControl:', showRoomControl.value)
   
   if (showBuildingList.value) {
-    fetchBuildings()
+    await fetchBuildings()
   } else if (showRoomControl.value) {
-    fetchRooms()
+    // Check query parameter FIRST before loading data
+    const roomIdFromQuery = selectedRoomFromQuery.value ? Number(selectedRoomFromQuery.value) : null
+    
+    // Load data from fetchBuildings (same as building list page) for dropdown
+    await fetchBuildings()
+    
+    // Load room data if room is specified in query (priority: query > current selection)
+    if (roomIdFromQuery) {
+      // Always use room from query parameter when page loads/refreshes
+      if (selectedRoomId.value !== roomIdFromQuery) {
+        selectedRoomId.value = roomIdFromQuery
+        await nextTick()
+        loadRoomDevices()
+      }
+    } else if (selectedArea.value) {
+      // If area is selected but no room in query, select first room in area
+      const targetArea = areas.value.find(a => {
+        const areaBuildingId = String(a.building_id)
+        const areaFloor = String(a.floor)
+        const buildingIdStr = String(selectedBuilding.value)
+        const floorNumberStr = String(selectedFloor.value)
+        return a.name === selectedArea.value && areaBuildingId === buildingIdStr && areaFloor === floorNumberStr
+      })
+      
+      if (targetArea) {
+        const areaRooms = rooms.value.filter(room => room.area_id === targetArea.id)
+        if (areaRooms.length > 0) {
+          // Only auto-select first room if no room is currently selected
+          if (!selectedRoomId.value) {
+            const firstRoomId = areaRooms[0].id
+            selectedRoomId.value = firstRoomId
+            // Update URL with room
+            router.replace({
+              query: {
+                ...route.query,
+                room: firstRoomId,
+              },
+            })
+            await nextTick()
+            loadRoomDevices()
+          }
+        }
+      }
+    }
   } else if (showFloorPlan.value) {
+    // Load data from fetchBuildings (same as building list page) for dropdown
+    await fetchBuildings()
     await loadFloorPlanAreas()
     // Use nextTick to ensure DOM is ready
     await nextTick()
     console.log('Calling checkFloorDeviceStates from watch...')
     await checkFloorDeviceStates()
+    // Load device states for all rooms in floor plan
+    await loadAllRoomDeviceStates()
   }
 }, { immediate: true })
 
@@ -1628,14 +2059,59 @@ onMounted(async () => {
   console.log('showFloorPlan:', showFloorPlan.value)
   
   if (showBuildingList.value) {
-    fetchBuildings()
+    await fetchBuildings()
   } else if (showRoomControl.value) {
-  fetchRooms()
+    // Check query parameter FIRST before loading data
+    const roomIdFromQuery = selectedRoomFromQuery.value ? Number(selectedRoomFromQuery.value) : null
+    
+    // Load data from fetchBuildings (same as building list page) for dropdown
+    await fetchBuildings()
+    
+    // Load room data if room is specified in query (priority: query > current selection)
+    if (roomIdFromQuery) {
+      // Always use room from query parameter when page loads/refreshes
+      selectedRoomId.value = roomIdFromQuery
+      await nextTick()
+      loadRoomDevices()
+    } else if (selectedArea.value) {
+      // If area is selected but no room in query, select first room in area
+      const targetArea = areas.value.find(a => {
+        const areaBuildingId = String(a.building_id)
+        const areaFloor = String(a.floor)
+        const buildingIdStr = String(selectedBuilding.value)
+        const floorNumberStr = String(selectedFloor.value)
+        return a.name === selectedArea.value && areaBuildingId === buildingIdStr && areaFloor === floorNumberStr
+      })
+      
+      if (targetArea) {
+        const areaRooms = rooms.value.filter(room => room.area_id === targetArea.id)
+        if (areaRooms.length > 0) {
+          // Only auto-select first room if no room is currently selected
+          if (!selectedRoomId.value) {
+            const firstRoomId = areaRooms[0].id
+            selectedRoomId.value = firstRoomId
+            // Update URL with room
+            router.replace({
+              query: {
+                ...route.query,
+                room: firstRoomId,
+              },
+            })
+            await nextTick()
+            loadRoomDevices()
+          }
+        }
+      }
+    }
   } else if (showFloorPlan.value) {
+    // Load data from fetchBuildings (same as building list page) for dropdown
+    await fetchBuildings()
     await loadFloorPlanAreas()
     await nextTick()
     console.log('Calling checkFloorDeviceStates from onMounted...')
     await checkFloorDeviceStates()
+    // Load device states for all rooms in floor plan
+    await loadAllRoomDeviceStates()
   }
 })
 
@@ -1805,6 +2281,52 @@ onBeforeUnmount(() => {
         <VCol cols="12">
           <VCard>
             <VCardText>
+              <!-- Dropdown Filters -->
+              <VRow class="mb-4">
+                <VCol
+                  cols="12"
+                  md="4"
+                >
+                  <VSelect
+                    v-model="selectedBuilding"
+                    :items="filteredBuildings.map(b => ({ value: b.id, title: b.name }))"
+                    label="เลือกตึก"
+                    density="compact"
+                    variant="outlined"
+                    @update:model-value="handleBuildingChange"
+                  />
+                </VCol>
+                <VCol
+                  cols="12"
+                  md="4"
+                >
+                  <VSelect
+                    v-model="selectedFloor"
+                    :items="availableFloors"
+                    label="เลือกชั้น"
+                    density="compact"
+                    variant="outlined"
+                    :disabled="!selectedBuilding"
+                    @update:model-value="handleFloorChange"
+                  />
+                </VCol>
+                <VCol
+                  cols="12"
+                  md="4"
+                >
+                  <VSelect
+                    v-model="selectedRoomId"
+                    :items="availableRooms"
+                    label="เลือกห้อง"
+                    density="compact"
+                    variant="outlined"
+                    :disabled="!selectedBuilding || !selectedFloor"
+                    clearable
+                    @update:model-value="handleRoomChange"
+                  />
+                </VCol>
+              </VRow>
+
               <div class="d-flex align-center justify-space-between">
                 <div class="d-flex align-center gap-3">
                   <VBtn
@@ -1886,46 +2408,56 @@ onBeforeUnmount(() => {
                   class="floor-plan-image"
                 />
                 
-                <!-- System Control Icon -->
-                <div
-                  class="system-control-icon-wrapper"
-                  :class="{ 
-                    'system-on': allSystemsOn, 
-                    'system-off': !allSystemsOn,
-                    'draggable': floorPlanEditMode
-                  }"
-                  :style="{
-                    top: `${systemControlPosition.top}px`,
-                    right: `${systemControlPosition.right}px`
-                  }"
-                  @click="!floorPlanEditMode && toggleSystemControl()"
-                  @mousedown="startDragSystemControl"
+                <!-- System Control Icons for each room -->
+                <template
+                  v-for="area in floorPlanAreas"
                 >
-                  <div 
-                    class="system-control-icon-circle"
-                    :style="{
-                      width: `${systemControlSize.width}px`,
-                      height: `${systemControlSize.height}px`
-                    }"
-                  >
-                    <VIcon
-                      icon="tabler-power"
-                      :size="Math.round(systemControlSize.width * 0.4)"
-                      :color="allSystemsOn ? 'warning' : 'default'"
-                    />
-                  </div>
-                  <div class="system-control-label">
-                    {{ allSystemsOn ? 'เปิด' : 'ปิด' }}
-                  </div>
-                  <!-- Resize Handle -->
                   <div
-                    v-if="floorPlanEditMode"
-                    class="system-control-resize-handle"
-                    @mousedown.stop="startResizeSystemControl"
+                    v-if="areaRoomsMap[area.id]"
+                    :key="`control-${area.id}`"
+                    class="system-control-icon-wrapper"
+                    :class="{ 
+                      'system-on': isRoomSystemsOn(areaRoomsMap[area.id].id), 
+                      'system-off': !isRoomSystemsOn(areaRoomsMap[area.id].id),
+                      'draggable': floorPlanEditMode
+                    }"
+                    :style="{
+                      top: `${getRoomControlPosition(areaRoomsMap[area.id].id).top}%`,
+                      left: `${getRoomControlPosition(areaRoomsMap[area.id].id).left}%`,
+                      position: 'absolute',
+                    }"
+                    @click="!floorPlanEditMode && toggleRoomSystemControl(areaRoomsMap[area.id].id)"
+                    @mousedown="floorPlanEditMode && startDragRoomControl($event, areaRoomsMap[area.id].id)"
                   >
-                    <VIcon icon="tabler-arrows-diagonal" size="16" />
+                    <div 
+                      class="system-control-icon-circle"
+                      :style="{
+                        width: '54px',
+                        height: '50px'
+                      }"
+                    >
+                      <VIcon
+                        icon="tabler-power"
+                        size="22"
+                        :color="isRoomSystemsOn(areaRoomsMap[area.id].id) ? 'warning' : 'default'"
+                      />
+                    </div>
+                    <div class="system-control-label">
+                      {{ isRoomSystemsOn(areaRoomsMap[area.id].id) ? 'เปิด' : 'ปิด' }}
+                    </div>
+                    <div class="system-control-room-name">
+                      {{ areaRoomsMap[area.id].name }}
+                    </div>
+                    <!-- Resize Handle for edit mode -->
+                    <div
+                      v-if="floorPlanEditMode"
+                      class="system-control-resize-handle"
+                      @mousedown.stop
+                    >
+                      <VIcon icon="tabler-arrows-move" size="16" />
+                    </div>
                   </div>
-                </div>
+                </template>
                 
                 <!-- Areas Overlay -->
                 <div class="areas-overlay">
@@ -2043,6 +2575,51 @@ onBeforeUnmount(() => {
         <VCol cols="12">
           <VCard>
             <VCardText>
+              <!-- Dropdown Filters -->
+              <VRow class="mb-4">
+                <VCol
+                  cols="12"
+                  md="4"
+                >
+                  <VSelect
+                    v-model="selectedBuilding"
+                    :items="filteredBuildings.map(b => ({ value: b.id, title: b.name }))"
+                    label="เลือกตึก"
+                    density="compact"
+                    variant="outlined"
+                    @update:model-value="handleBuildingChange"
+                  />
+                </VCol>
+                <VCol
+                  cols="12"
+                  md="4"
+                >
+                  <VSelect
+                    v-model="selectedFloor"
+                    :items="availableFloors"
+                    label="เลือกชั้น"
+                    density="compact"
+                    variant="outlined"
+                    :disabled="!selectedBuilding"
+                    @update:model-value="handleFloorChange"
+                  />
+                </VCol>
+                <VCol
+                  cols="12"
+                  md="4"
+                >
+                  <VSelect
+                    v-model="selectedRoomId"
+                    :items="availableRooms"
+                    label="เลือกห้อง"
+                    density="compact"
+                    variant="outlined"
+                    :disabled="!selectedBuilding || !selectedFloor"
+                    @update:model-value="handleRoomChange"
+                  />
+                </VCol>
+              </VRow>
+
               <div class="d-flex align-center gap-3">
                 <VBtn
                   icon
