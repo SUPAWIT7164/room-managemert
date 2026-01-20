@@ -3,6 +3,8 @@ const { v4: uuidv4 } = require('uuid');
 
 class Booking {
     static async findAll(options = {}) {
+        console.log('[Booking.findAll] Called with options:', JSON.stringify(options, null, 2));
+        
         let query = `
             SELECT br.*, 
                    r.name as room_name,
@@ -62,17 +64,36 @@ class Booking {
 
         query += ' ORDER BY br.start_datetime DESC';
 
-        if (options.limit) {
-            query += ' LIMIT ?';
-            params.push(parseInt(options.limit));
+        if (options.limit !== undefined && options.limit !== null) {
+            const limitValue = parseInt(options.limit);
+            if (!isNaN(limitValue) && limitValue > 0) {
+                query += ' LIMIT ?';
+                params.push(limitValue);
+                console.log('[Booking.findAll] Adding LIMIT:', limitValue);
+            } else {
+                console.warn('[Booking.findAll] Invalid limit value:', options.limit);
+            }
+        } else {
+            console.log('[Booking.findAll] No limit specified');
         }
 
-        if (options.offset) {
-            query += ' OFFSET ?';
-            params.push(parseInt(options.offset));
+        if (options.offset !== undefined && options.offset !== null) {
+            const offsetValue = parseInt(options.offset);
+            if (!isNaN(offsetValue) && offsetValue >= 0) {
+                query += ' OFFSET ?';
+                params.push(offsetValue);
+                console.log('[Booking.findAll] Adding OFFSET:', offsetValue);
+            } else {
+                console.warn('[Booking.findAll] Invalid offset value:', options.offset);
+            }
+        } else {
+            console.log('[Booking.findAll] No offset specified');
         }
 
+        console.log('[Booking.findAll] Final query:', query);
+        console.log('[Booking.findAll] Params:', params);
         const [rows] = await pool.query(query, params);
+        console.log('[Booking.findAll] Returned rows:', rows.length, 'Expected limit:', options.limit);
         
         // Map to unified format
         return rows.map(row => ({
@@ -417,12 +438,22 @@ class Booking {
     }
 
     static async count(options = {}) {
-        let query = 'SELECT COUNT(*) as total FROM booking_requests br WHERE 1=1';
+        // Use the same query structure as findAll but with COUNT
+        // This ensures consistency between count and findAll filters
+        let query = `
+            SELECT COUNT(*) as total 
+            FROM booking_requests br
+            LEFT JOIN rooms r ON br.room_id = r.id
+            LEFT JOIN users u ON br.user_id = u.id
+            LEFT JOIN areas a ON r.area_id = a.id
+            LEFT JOIN buildings b ON a.building_id = b.id
+            WHERE 1=1
+        `;
         const params = [];
 
-        if (options.status) {
-            query += ' AND br.status = ?';
-            params.push(options.status);
+        if (options.room_id) {
+            query += ' AND br.room_id = ?';
+            params.push(options.room_id);
         }
 
         if (options.booker_id) {
@@ -430,13 +461,43 @@ class Booking {
             params.push(options.booker_id);
         }
 
-        if (options.room_id) {
-            query += ' AND br.room_id = ?';
-            params.push(options.room_id);
+        if (options.status) {
+            if (Array.isArray(options.status)) {
+                query += ` AND br.status IN (${options.status.map(() => '?').join(',')})`;
+                params.push(...options.status);
+            } else {
+                query += ' AND br.status = ?';
+                params.push(options.status);
+            }
         }
 
+        if (options.start_date) {
+            query += ' AND DATE(br.start_datetime) >= ?';
+            params.push(options.start_date);
+        }
+
+        if (options.end_date) {
+            query += ' AND DATE(br.end_datetime) <= ?';
+            params.push(options.end_date);
+        }
+
+        if (options.date) {
+            query += ' AND DATE(br.start_datetime) = ?';
+            params.push(options.date);
+        }
+
+        if (options.building_id) {
+            query += ' AND b.id = ?';
+            params.push(options.building_id);
+        }
+
+        console.log('[Booking.count] Query:', query);
+        console.log('[Booking.count] Params:', params);
+        console.log('[Booking.count] Options:', JSON.stringify(options, null, 2));
         const [rows] = await pool.query(query, params);
-        return rows[0].total;
+        const total = rows[0].total;
+        console.log('[Booking.count] Total count:', total);
+        return total;
     }
 
     static async getStatistics(options = {}) {

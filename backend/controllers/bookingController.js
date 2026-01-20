@@ -130,7 +130,7 @@ class BookingController {
     // Get all bookings
     async getAll(req, res) {
         try {
-            const { status, room_id, booker_id, start_date, end_date, limit, offset } = req.query;
+            const { status, room_id, booker_id, start_date, end_date, limit, offset, page } = req.query;
             const user = req.user;
             
             const options = {};
@@ -138,8 +138,6 @@ class BookingController {
             if (room_id) options.room_id = parseInt(room_id);
             if (start_date) options.start_date = start_date;
             if (end_date) options.end_date = end_date;
-            if (limit) options.limit = parseInt(limit);
-            if (offset) options.offset = parseInt(offset);
             
             // Apply user-based filtering if the user is a regular user
             // user role จะเห็นเฉพาะการจองของตัวเอง
@@ -150,11 +148,52 @@ class BookingController {
                 options.booker_id = parseInt(booker_id);
             }
             
-            const bookings = await Booking.findAll(options);
+            // Handle pagination
+            const limitValue = limit ? parseInt(limit) : 10;
+            const pageValue = page ? parseInt(page) : 1;
+            const offsetValue = offset ? parseInt(offset) : (pageValue - 1) * limitValue;
+            
+            console.log('[BookingController] Pagination params:', { limit, page, limitValue, pageValue, offsetValue });
+            console.log('[BookingController] Options before findAll:', { ...options, limit: limitValue, offset: offsetValue });
+            
+            // Get total count for pagination (without limit/offset)
+            const countOptions = { ...options };
+            delete countOptions.limit;
+            delete countOptions.offset;
+            const total = await Booking.count(countOptions);
+            
+            // Apply limit and offset for data fetching
+            // Create a new options object to ensure limit and offset are set correctly
+            const findAllOptions = {
+                ...options,
+                limit: limitValue,
+                offset: offsetValue
+            };
+            
+            console.log('[BookingController] Options for findAll:', JSON.stringify(findAllOptions, null, 2));
+            console.log('[BookingController] Limit value:', findAllOptions.limit, 'Type:', typeof findAllOptions.limit);
+            console.log('[BookingController] Offset value:', findAllOptions.offset, 'Type:', typeof findAllOptions.offset);
+            
+            const bookings = await Booking.findAll(findAllOptions);
+            
+            console.log('[BookingController] Found bookings:', bookings.length, 'out of', total, 'total');
+            console.log('[BookingController] Expected limit:', limitValue, 'Actual returned:', bookings.length);
+            
+            if (bookings.length !== Math.min(limitValue, total)) {
+                console.warn('[BookingController] WARNING: Expected', Math.min(limitValue, total), 'bookings but got', bookings.length);
+            }
+            
+            const totalPages = Math.ceil(total / limitValue);
             
             res.json({
                 success: true,
-                data: bookings
+                data: bookings,
+                pagination: {
+                    page: pageValue,
+                    limit: limitValue,
+                    total: total,
+                    totalPages: totalPages
+                }
             });
         } catch (error) {
             console.error('Get all bookings error:', error);

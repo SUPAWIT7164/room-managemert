@@ -28,12 +28,13 @@ const errors = ref({
 
 const refVForm = ref()
 
-// Load saved username from localStorage
+// Load saved username and password from localStorage
 const savedUsername = localStorage.getItem('savedUsername') || ''
+const savedPassword = localStorage.getItem('savedPassword') || ''
 
 const credentials = ref({
   username: savedUsername,
-  password: '',
+  password: savedPassword,
 })
 
 const rememberMe = ref(false)
@@ -49,16 +50,18 @@ const login = async () => {
       rememberMe: rememberMe.value,
     })
 
-    // Save username if remember me is checked
+    // Save username and password if remember me is checked
     if (rememberMe.value) {
       localStorage.setItem('savedUsername', credentials.value.username)
+      localStorage.setItem('savedPassword', credentials.value.password)
     } else {
       localStorage.removeItem('savedUsername')
+      localStorage.removeItem('savedPassword')
     }
 
-    // Redirect to dashboard or return URL
+    // Redirect to bookings calendar or return URL
     await nextTick(() => {
-      const redirectPath = route.query.to ? String(route.query.to) : '/dashboard'
+      const redirectPath = route.query.to ? String(route.query.to) : '/bookings/calendar'
       router.replace(redirectPath)
     })
   } catch (error) {
@@ -84,7 +87,7 @@ const onSubmit = () => {
 const loginWithMicrosoft = () => {
   oauthLoading.value = true
   const frontendUrl = window.location.origin
-  const redirectUri = route.query.to ? String(route.query.to) : '/dashboard'
+  const redirectUri = route.query.to ? String(route.query.to) : '/bookings/calendar'
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
   
   // Redirect to backend OAuth endpoint
@@ -103,16 +106,18 @@ const loginWithLDAP = async () => {
       rememberMe: rememberMe.value,
     })
 
-    // Save username if remember me is checked
+    // Save username and password if remember me is checked
     if (rememberMe.value) {
       localStorage.setItem('savedUsername', credentials.value.username)
+      localStorage.setItem('savedPassword', credentials.value.password)
     } else {
       localStorage.removeItem('savedUsername')
+      localStorage.removeItem('savedPassword')
     }
 
-    // Redirect to dashboard or return URL
+    // Redirect to bookings calendar or return URL
     await nextTick(() => {
-      const redirectPath = route.query.to ? String(route.query.to) : '/dashboard'
+      const redirectPath = route.query.to ? String(route.query.to) : '/bookings/calendar'
       router.replace(redirectPath)
     })
   } catch (error) {
@@ -168,6 +173,7 @@ const loginWithLDAP = async () => {
                 label="ชื่อผู้ใช้"
                 placeholder="กรุณากรอกชื่อผู้ใช้"
                 autofocus
+                autocomplete="username"
                 :error-messages="errors.username"
               />
             </VCol>

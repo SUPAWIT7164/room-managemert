@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import api from '@/utils/api'
 import moment from 'moment'
 import 'moment/locale/th'
@@ -18,9 +18,9 @@ const loading = ref(false)
 const reportData = ref([])
 const dateRangeInput = ref(null)
 
-// Initialize dates with today
+// Initialize dates: 1st of current month to today
 moment.locale('th')
-const startDate = ref(moment().format('YYYY-MM-DD'))
+const startDate = ref(moment().startOf('month').format('YYYY-MM-DD'))
 const endDate = ref(moment().format('YYYY-MM-DD'))
 
 // Chart element ref
@@ -74,8 +74,12 @@ const fetchReportData = async (start, end) => {
       return new Date(a.date) - new Date(b.date)
     })
     
+    // Wait for DOM update and then update chart
     await nextTick()
-    updateChart()
+    // Give a bit more time for the DOM to be fully ready
+    setTimeout(() => {
+      updateChart()
+    }, 200)
   } catch (error) {
     console.error('Error fetching report data:', error)
     alert('ไม่สามารถโหลดข้อมูลรายงานได้: ' + (error.response?.data?.message || error.message))
@@ -84,25 +88,50 @@ const fetchReportData = async (start, end) => {
   }
 }
 
-const updateChart = () => {
-  if (!chartEl.value) return
-
-  if (chart) {
-    chart.destroy()
-    chart = null
-  }
-
-  if (!reportData.value || reportData.value.length === 0) {
+const updateChart = async () => {
+  // Wait for DOM to be ready
+  await nextTick()
+  
+  if (!chartEl.value) {
+    console.warn('Chart element not found, retrying...')
+    setTimeout(() => updateChart(), 100)
     return
   }
 
+  // Destroy existing chart if any
+  if (chart) {
+    try {
+      chart.destroy()
+    } catch (error) {
+      console.warn('Error destroying chart:', error)
+    }
+    chart = null
+  }
+
+  // Check if we have data
+  if (!reportData.value || reportData.value.length === 0) {
+    console.warn('No report data to display')
+    return
+  }
+
+  // Prepare data
   const dates = reportData.value.map(item => moment(item.date).format('DD/MM/YYYY'))
   const counts = reportData.value.map(item => Number(item.totalAccess) || 0)
+
+  // Verify element is in DOM
+  if (!chartEl.value || !document.contains(chartEl.value)) {
+    console.warn('Chart element not in DOM, retrying...')
+    setTimeout(() => updateChart(), 100)
+    return
+  }
 
   const chartOptions = {
     chart: {
       type: 'bar',
       height: 350,
+      toolbar: {
+        show: true,
+      },
     },
     series: [{
       name: 'จำนวนการเข้าใช้งาน',
@@ -124,10 +153,24 @@ const updateChart = () => {
       text: 'จำนวนการเข้าใช้งานแต่ละวัน',
       align: 'center',
     },
+    dataLabels: {
+      enabled: false,
+    },
+    plotOptions: {
+      bar: {
+        borderRadius: 4,
+        columnWidth: '70%',
+      },
+    },
   }
 
-  chart = new ApexCharts(chartEl.value, chartOptions)
-  chart.render()
+  try {
+    chart = new ApexCharts(chartEl.value, chartOptions)
+    await chart.render()
+    console.log('Chart rendered successfully')
+  } catch (error) {
+    console.error('Error rendering chart:', error)
+  }
 }
 
 // Initialize date range picker
@@ -182,8 +225,8 @@ const initializeDateRangePicker = () => {
             'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม',
           ],
         },
-        startDate: moment(),
-        endDate: moment(),
+        startDate: moment().startOf('month'), // วันที่ 1 ของเดือน
+        endDate: moment(), // วันนี้
       }, (start, end) => {
         console.log('Date range selected:', start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'))
         startDate.value = start.format('YYYY-MM-DD')
@@ -213,6 +256,35 @@ const initializeDateRangePicker = () => {
 
   tryInitialize()
 }
+
+// Watch for reportData changes to update chart
+watch(
+  () => reportData.value,
+  () => {
+    if (reportData.value && reportData.value.length > 0) {
+      nextTick(() => {
+        setTimeout(() => {
+          updateChart()
+        }, 300)
+      })
+    }
+  },
+  { deep: true }
+)
+
+// Watch for chartEl to be ready
+watch(
+  () => chartEl.value,
+  (newVal) => {
+    if (newVal && reportData.value && reportData.value.length > 0) {
+      nextTick(() => {
+        setTimeout(() => {
+          updateChart()
+        }, 300)
+      })
+    }
+  }
+)
 
 onMounted(() => {
   if (typeof window !== 'undefined') {
@@ -403,7 +475,8 @@ onBeforeUnmount(() => {
             <div
               v-else
               ref="chartEl"
-              style="min-height: 350px;"
+              id="access-statistic-chart"
+              style="min-height: 350px; width: 100%;"
             />
           </VCardText>
         </VCard>
@@ -445,6 +518,15 @@ onBeforeUnmount(() => {
 :deep(.daterangepicker) {
   z-index: 9999 !important;
   display: block !important;
+}
+
+/* ApexCharts styling */
+#access-statistic-chart {
+  position: relative;
+}
+
+:deep(#access-statistic-chart .apexcharts-canvas) {
+  margin: 0 auto;
 }
 </style>
 

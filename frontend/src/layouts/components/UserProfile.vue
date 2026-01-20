@@ -1,12 +1,43 @@
 <script setup>
 import { PerfectScrollbar } from 'vue3-perfect-scrollbar'
 import { useAuthStore } from '@/stores/auth'
+import { ref, computed, onMounted } from 'vue'
+import api from '@/utils/api'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
 // Get user data from auth store
 const userData = computed(() => authStore.user)
+
+// Face image from face registration
+const faceImage = ref(null)
+
+// Load face image from API
+const loadFaceImage = async () => {
+  try {
+    const response = await api.get('/face')
+    if (response.data.success && response.data.data?.image) {
+      faceImage.value = response.data.data.image
+    }
+  } catch (error) {
+    // Silently fail if face image doesn't exist
+    console.log('Face image not found or error loading:', error.message)
+    faceImage.value = null
+  }
+}
+
+// Load face image on mount
+onMounted(() => {
+  if (authStore.isAuthenticated) {
+    loadFaceImage()
+  }
+})
+
+// Get the image to display (prioritize face image, then avatar/photo, then null)
+const displayImage = computed(() => {
+  return faceImage.value || userData.value?.avatar || userData.value?.photo || null
+})
 
 const logout = async () => {
   // Use auth store logout
@@ -46,12 +77,13 @@ const userProfileList = [
     <VAvatar
       size="38"
       class="cursor-pointer"
-      :color="!(userData && userData.avatar) ? 'primary' : undefined"
-      :variant="!(userData && userData.avatar) ? 'tonal' : undefined"
+      :color="!displayImage ? 'primary' : undefined"
+      :variant="!displayImage ? 'tonal' : undefined"
     >
       <VImg
-        v-if="userData && userData.avatar"
-        :src="userData.avatar"
+        v-if="displayImage"
+        :src="displayImage"
+        alt="รูปผู้ใช้"
       />
       <VIcon
         v-else
@@ -78,12 +110,13 @@ const userProfileList = [
                   bordered
                 >
                   <VAvatar
-                    :color="!(userData && userData.avatar) ? 'primary' : undefined"
-                    :variant="!(userData && userData.avatar) ? 'tonal' : undefined"
+                    :color="!displayImage ? 'primary' : undefined"
+                    :variant="!displayImage ? 'tonal' : undefined"
                   >
                     <VImg
-                      v-if="userData && userData.avatar"
-                      :src="userData.avatar"
+                      v-if="displayImage"
+                      :src="displayImage"
+                      alt="รูปผู้ใช้"
                     />
                     <VIcon
                       v-else

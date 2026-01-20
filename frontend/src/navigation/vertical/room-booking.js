@@ -75,6 +75,16 @@ export default [
     ],
   },
   {
+    title: 'สถานะปัจจุบัน',
+    icon: { icon: 'tabler-users' },
+    children: [
+      {
+        title: 'ผู้ใช้เข้าใช้บริการปัจจุบัน',
+        to: 'reports-current-service-users',
+      },
+    ],
+  },
+  {
     title: 'พลังงานและสิ่งแวดล้อม',
     icon: { icon: 'tabler-leaf' },
     children: [
@@ -84,7 +94,28 @@ export default [
       },
       {
         title: 'การใช้น้ำ',
-        to: 'reports-usage-quota',
+        to: 'reports-water-usage',
+      },
+      {
+        title: 'ค่าใช้จ่ายค่าไฟและค่าน้ำ',
+        to: 'utilities-expenses',
+      },
+      {
+        title: 'รายงานค่าใช้จ่ายของผู้เช่าร้านค้า',
+        to: 'utilities-tenant-expenses',
+      },
+      {
+        title: 'สภาพแวดล้อมภายในห้อง',
+        to: 'reports-environment',
+      },
+      {
+        title: 'ตั้งค่า',
+        children: [
+          {
+            title: 'การแจ้งเตือน',
+            to: 'energy-notification',
+          },
+        ],
       },
     ],
   },

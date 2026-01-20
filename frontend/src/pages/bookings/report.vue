@@ -1,11 +1,13 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import VueApexCharts from 'vue3-apexcharts'
+import { useTheme } from 'vuetify'
+import { getMultiLineChartConfig, getBarChartConfig } from '@core/libs/apex-chart/apexCharConfig'
 import api from '@/utils/api'
 import moment from 'moment'
 import 'moment/locale/th'
 import $ from 'jquery'
 import 'daterangepicker'
-import ApexCharts from 'apexcharts'
 
 // Make moment available globally for daterangepicker
 // This must be done before any daterangepicker initialization
@@ -20,6 +22,8 @@ definePage({
   },
 })
 
+const vuetifyTheme = useTheme()
+
 const loading = ref(false)
 const reportData = ref([])
 const dateRangeInput = ref(null)
@@ -30,23 +34,195 @@ if (typeof window !== 'undefined') {
   moment.locale('th')
 }
 
-// Initialize dates with today
-const startDate = ref(moment().format('YYYY-MM-DD'))
+// Initialize dates: 1st of current month to today
+const startDate = ref(moment().startOf('month').format('YYYY-MM-DD'))
 const endDate = ref(moment().format('YYYY-MM-DD'))
 
-// Chart element refs
-const bookingCountChartEl = ref(null)
-const totalHoursChartEl = ref(null)
-const statusChartEl = ref(null)
+// Chart data
+const chartData = ref({
+  bookingCount: [],
+  totalHours: [],
+  status: {
+    approved: [],
+    cancelled: [],
+    rejected: [],
+  },
+})
 
-// Chart instances
-let bookingCountChart = null
-let totalHoursChart = null
-let statusChart = null
+// Chart configurations using template style
+const bookingCountChartConfig = computed(() => {
+  const baseConfig = getBarChartConfig(vuetifyTheme.current.value)
+  
+  return {
+    ...baseConfig,
+    colors: ['#667eea'],
+    plotOptions: {
+      bar: {
+        borderRadius: 8,
+        columnWidth: '50%',
+        dataLabels: {
+          position: 'top',
+        },
+      },
+    },
+    dataLabels: {
+      enabled: false,
+    },
+    xaxis: {
+      ...baseConfig.xaxis,
+      type: 'category', // Use category instead of datetime for room names
+      categories: reportData.value.map(item => item.room),
+      // Remove datetime-related properties from baseConfig
+      datetimeUTC: undefined,
+      title: {
+        text: 'ห้อง',
+        style: {
+          fontSize: '0.8125rem',
+          fontWeight: 500,
+          color: baseConfig.xaxis.labels.style.colors,
+        },
+      },
+    },
+    yaxis: {
+      ...baseConfig.yaxis,
+      title: {
+        text: 'จำนวนการใช้งาน',
+        style: {
+          fontSize: '0.8125rem',
+          fontWeight: 500,
+          color: baseConfig.yaxis.labels.style.colors,
+        },
+      },
+      labels: {
+        ...baseConfig.yaxis.labels,
+        formatter: (val) => val?.toFixed(0) || '0',
+      },
+    },
+    tooltip: {
+      ...baseConfig.tooltip,
+      y: {
+        ...baseConfig.tooltip.y,
+        formatter: (val) => `${val?.toFixed(0) || '0'} ครั้ง`,
+      },
+    },
+  }
+})
 
-// Retry counter to prevent infinite loops
-let chartRenderRetries = 0
-const MAX_CHART_RETRIES = 10
+const totalHoursChartConfig = computed(() => {
+  const baseConfig = getBarChartConfig(vuetifyTheme.current.value)
+  
+  return {
+    ...baseConfig,
+    colors: ['#764ba2'],
+    plotOptions: {
+      bar: {
+        borderRadius: 8,
+        columnWidth: '50%',
+        dataLabels: {
+          position: 'top',
+        },
+      },
+    },
+    dataLabels: {
+      enabled: false,
+    },
+    xaxis: {
+      ...baseConfig.xaxis,
+      type: 'category', // Use category instead of datetime for room names
+      categories: reportData.value.map(item => item.room),
+      // Remove datetime-related properties from baseConfig
+      datetimeUTC: undefined,
+      title: {
+        text: 'ห้อง',
+        style: {
+          fontSize: '0.8125rem',
+          fontWeight: 500,
+          color: baseConfig.xaxis.labels.style.colors,
+        },
+      },
+    },
+    yaxis: {
+      ...baseConfig.yaxis,
+      title: {
+        text: 'จำนวนชั่วโมง',
+        style: {
+          fontSize: '0.8125rem',
+          fontWeight: 500,
+          color: baseConfig.yaxis.labels.style.colors,
+        },
+      },
+      labels: {
+        ...baseConfig.yaxis.labels,
+        formatter: (val) => val?.toFixed(1) || '0',
+      },
+    },
+    tooltip: {
+      ...baseConfig.tooltip,
+      y: {
+        ...baseConfig.tooltip.y,
+        formatter: (val) => `${val?.toFixed(2) || '0'} ชั่วโมง`,
+      },
+    },
+  }
+})
+
+const statusChartConfig = computed(() => {
+  const baseConfig = getBarChartConfig(vuetifyTheme.current.value)
+  
+  return {
+    ...baseConfig,
+    colors: ['#1E90FF', '#FFA500', '#FF4500'],
+    plotOptions: {
+      bar: {
+        borderRadius: 8,
+        columnWidth: '50%',
+        dataLabels: {
+          position: 'top',
+        },
+      },
+    },
+    dataLabels: {
+      enabled: false,
+    },
+    xaxis: {
+      ...baseConfig.xaxis,
+      type: 'category', // Use category instead of datetime for room names
+      categories: reportData.value.map(item => item.room),
+      // Remove datetime-related properties from baseConfig
+      datetimeUTC: undefined,
+      title: {
+        text: 'ห้อง',
+        style: {
+          fontSize: '0.8125rem',
+          fontWeight: 500,
+          color: baseConfig.xaxis.labels.style.colors,
+        },
+      },
+    },
+    yaxis: {
+      ...baseConfig.yaxis,
+      title: {
+        text: 'จำนวน',
+        style: {
+          fontSize: '0.8125rem',
+          fontWeight: 500,
+          color: baseConfig.yaxis.labels.style.colors,
+        },
+      },
+      labels: {
+        ...baseConfig.yaxis.labels,
+        formatter: (val) => val?.toFixed(0) || '0',
+      },
+    },
+    tooltip: {
+      ...baseConfig.tooltip,
+      y: {
+        ...baseConfig.tooltip.y,
+        formatter: (val) => `${val?.toFixed(0) || '0'}`,
+      },
+    },
+  }
+})
 
 const fetchReportData = async (start, end) => {
   loading.value = true
@@ -63,11 +239,28 @@ const fetchReportData = async (start, end) => {
     // Set data first
     reportData.value = transformedData
     
-    // Wait for Vue to update DOM before rendering charts
-    await nextTick()
-    
-    // Update charts and table after DOM is ready
-    updateChartsAndTable(transformedData)
+    // Update chart data
+    if (transformedData.length > 0) {
+      chartData.value = {
+        bookingCount: transformedData.map(item => Number(item.booking_count) || 0),
+        totalHours: transformedData.map(item => Number(item.total_hours.toFixed(2)) || 0),
+        status: {
+          approved: transformedData.map(item => Number(item.approve_count) || 0),
+          cancelled: transformedData.map(item => Number(item.cancel_count) || 0),
+          rejected: transformedData.map(item => Number(item.reject_count) || 0),
+        },
+      }
+    } else {
+      chartData.value = {
+        bookingCount: [],
+        totalHours: [],
+        status: {
+          approved: [],
+          cancelled: [],
+          rejected: [],
+        },
+      }
+    }
   } catch (error) {
     console.error('Error fetching report data:', error)
     alert('ไม่สามารถโหลดข้อมูลรายงานได้: ' + (error.response?.data?.message || error.message))
@@ -115,163 +308,6 @@ const transformReportData = (data) => {
   })
   
   return Object.values(roomMap)
-}
-
-const updateChartsAndTable = async (data) => {
-  if (data.length === 0) {
-    // Clear charts
-    if (bookingCountChart) {
-      bookingCountChart.destroy()
-      bookingCountChart = null
-    }
-    if (totalHoursChart) {
-      totalHoursChart.destroy()
-      totalHoursChart = null
-    }
-    if (statusChart) {
-      statusChart.destroy()
-      statusChart = null
-    }
-    return
-  }
-  
-  const rooms = data.map(item => item.room)
-  const bookingCounts = data.map(item => Number(item.booking_count) || 0)
-  const totalHoursData = data.map(item => Number(item.total_hours.toFixed(2)) || 0)
-  const approvedCounts = data.map(item => Number(item.approve_count) || 0)
-  const cancelledCounts = data.map(item => Number(item.cancel_count) || 0)
-  const rejectedCounts = data.map(item => Number(item.reject_count) || 0)
-  
-  // Reset retry counter
-  chartRenderRetries = 0
-  
-  // Wait for DOM to be ready before rendering charts
-  await nextTick()
-  renderCharts(rooms, bookingCounts, totalHoursData, approvedCounts, cancelledCounts, rejectedCounts)
-}
-
-const renderCharts = (rooms, bookingCounts, totalHoursData, approvedCounts, cancelledCounts, rejectedCounts) => {
-  // Check if elements exist using refs
-  const bookingCountEl = bookingCountChartEl.value
-  const totalHoursEl = totalHoursChartEl.value
-  const statusEl = statusChartEl.value
-  
-  // Verify elements are in DOM
-  if (!bookingCountEl || !totalHoursEl || !statusEl) {
-    chartRenderRetries++
-    if (chartRenderRetries < MAX_CHART_RETRIES) {
-      console.warn(`Chart elements not found, retrying... (${chartRenderRetries}/${MAX_CHART_RETRIES})`)
-      setTimeout(() => {
-        renderCharts(rooms, bookingCounts, totalHoursData, approvedCounts, cancelledCounts, rejectedCounts)
-      }, 200)
-    } else {
-      console.error('Chart elements not found after maximum retries')
-    }
-    return
-  }
-  
-  // Additional check: verify elements are actually in the DOM
-  if (!document.body.contains(bookingCountEl) || 
-      !document.body.contains(totalHoursEl) || 
-      !document.body.contains(statusEl)) {
-    chartRenderRetries++
-    if (chartRenderRetries < MAX_CHART_RETRIES) {
-      console.warn(`Chart elements not in DOM, retrying... (${chartRenderRetries}/${MAX_CHART_RETRIES})`)
-      setTimeout(() => {
-        renderCharts(rooms, bookingCounts, totalHoursData, approvedCounts, cancelledCounts, rejectedCounts)
-      }, 200)
-    } else {
-      console.error('Chart elements not in DOM after maximum retries')
-    }
-    return
-  }
-  
-  // Destroy previous charts
-  if (bookingCountChart) {
-    bookingCountChart.destroy()
-    bookingCountChart = null
-  }
-  if (totalHoursChart) {
-    totalHoursChart.destroy()
-    totalHoursChart = null
-  }
-  if (statusChart) {
-    statusChart.destroy()
-    statusChart = null
-  }
-  
-  // Booking Count Chart
-  bookingCountChart = new ApexCharts(bookingCountEl, {
-    chart: {
-      type: 'bar',
-      height: 350,
-    },
-    series: [{
-      name: 'จำนวนการใช้งาน',
-      data: bookingCounts,
-    }],
-    xaxis: {
-      categories: rooms,
-    },
-    colors: ['#667eea'],
-    title: {
-      text: 'จำนวนการใช้งาน',
-      align: 'center',
-    },
-  })
-  bookingCountChart.render()
-  
-  // Total Hours Chart
-  totalHoursChart = new ApexCharts(totalHoursEl, {
-    chart: {
-      type: 'bar',
-      height: 350,
-    },
-    series: [{
-      name: 'จำนวนชั่วโมงทั้งหมด',
-      data: totalHoursData,
-    }],
-    xaxis: {
-      categories: rooms,
-    },
-    colors: ['#764ba2'],
-    title: {
-      text: 'จำนวนชั่วโมงทั้งหมด',
-      align: 'center',
-    },
-  })
-  totalHoursChart.render()
-  
-  // Status Chart
-  statusChart = new ApexCharts(statusEl, {
-    chart: {
-      type: 'bar',
-      height: 350,
-    },
-    series: [
-      {
-        name: 'อนุมัติแล้ว',
-        data: approvedCounts,
-      },
-      {
-        name: 'ยกเลิก',
-        data: cancelledCounts,
-      },
-      {
-        name: 'ปฏิเสธ',
-        data: rejectedCounts,
-      },
-    ],
-    xaxis: {
-      categories: rooms,
-    },
-    colors: ['#1E90FF', '#FFA500', '#FF4500'],
-    title: {
-      text: 'สถานะการจอง (อนุมัติแล้ว, ยกเลิก, ปฏิเสธ)',
-      align: 'center',
-    },
-  })
-  statusChart.render()
 }
 
 // Initialize date range picker
@@ -331,8 +367,8 @@ const initializeDateRangePicker = () => {
             'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม',
           ],
         },
-        startDate: moment(),
-        endDate: moment(),
+        startDate: moment().startOf('month'), // วันที่ 1 ของเดือน
+        endDate: moment(), // วันนี้
       }, (start, end) => {
         console.log('Date range selected:', start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'))
         startDate.value = start.format('YYYY-MM-DD')
@@ -396,21 +432,31 @@ const calculateTotals = () => {
 const totals = computed(() => calculateTotals())
 
 
-// Watch reportData changes and render charts when data is ready
-watch(reportData, async (newData) => {
-  if (newData && newData.length > 0 && !loading.value) {
-    await nextTick()
-    const rooms = newData.map(item => item.room)
-    const bookingCounts = newData.map(item => Number(item.booking_count) || 0)
-    const totalHoursData = newData.map(item => Number(item.total_hours.toFixed(2)) || 0)
-    const approvedCounts = newData.map(item => Number(item.approve_count) || 0)
-    const cancelledCounts = newData.map(item => Number(item.cancel_count) || 0)
-    const rejectedCounts = newData.map(item => Number(item.reject_count) || 0)
-    
-    chartRenderRetries = 0
-    renderCharts(rooms, bookingCounts, totalHoursData, approvedCounts, cancelledCounts, rejectedCounts)
-  }
-}, { deep: true })
+// Chart series computed
+const bookingCountSeries = computed(() => [{
+  name: 'จำนวนการใช้งาน',
+  data: chartData.value.bookingCount,
+}])
+
+const totalHoursSeries = computed(() => [{
+  name: 'จำนวนชั่วโมงทั้งหมด',
+  data: chartData.value.totalHours,
+}])
+
+const statusSeries = computed(() => [
+  {
+    name: 'อนุมัติแล้ว',
+    data: chartData.value.status.approved,
+  },
+  {
+    name: 'ยกเลิก',
+    data: chartData.value.status.cancelled,
+  },
+  {
+    name: 'ปฏิเสธ',
+    data: chartData.value.status.rejected,
+  },
+])
 
 onMounted(() => {
   // Ensure moment is available globally before using daterangepicker
@@ -424,20 +470,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  // Destroy charts
-  if (bookingCountChart) {
-    bookingCountChart.destroy()
-    bookingCountChart = null
-  }
-  if (totalHoursChart) {
-    totalHoursChart.destroy()
-    totalHoursChart = null
-  }
-  if (statusChart) {
-    statusChart.destroy()
-    statusChart = null
-  }
-  
   // Destroy daterangepicker
   if (dateRangeInput.value) {
     const $input = $(dateRangeInput.value)
@@ -532,12 +564,19 @@ onBeforeUnmount(() => {
                 color="primary"
               />
             </div>
+            <VueApexCharts
+              v-else-if="chartData.bookingCount && chartData.bookingCount.length > 0"
+              type="bar"
+              height="350"
+              :options="bookingCountChartConfig"
+              :series="bookingCountSeries"
+            />
             <div
               v-else
-              ref="bookingCountChartEl"
-              id="bookingCountChart"
-              style="min-height: 350px;"
-            />
+              class="text-center py-8 text-disabled"
+            >
+              ไม่มีข้อมูล
+            </div>
           </VCardText>
         </VCard>
       </VCol>
@@ -566,12 +605,19 @@ onBeforeUnmount(() => {
                 color="primary"
               />
             </div>
+            <VueApexCharts
+              v-else-if="chartData.totalHours && chartData.totalHours.length > 0"
+              type="bar"
+              height="350"
+              :options="totalHoursChartConfig"
+              :series="totalHoursSeries"
+            />
             <div
               v-else
-              ref="totalHoursChartEl"
-              id="totalHoursChart"
-              style="min-height: 350px;"
-            />
+              class="text-center py-8 text-disabled"
+            >
+              ไม่มีข้อมูล
+            </div>
           </VCardText>
         </VCard>
       </VCol>
@@ -599,12 +645,19 @@ onBeforeUnmount(() => {
                 color="primary"
               />
             </div>
+            <VueApexCharts
+              v-else-if="chartData.status.approved && chartData.status.approved.length > 0"
+              type="bar"
+              height="350"
+              :options="statusChartConfig"
+              :series="statusSeries"
+            />
             <div
               v-else
-              ref="statusChartEl"
-              id="statusChart"
-              style="min-height: 350px;"
-            />
+              class="text-center py-8 text-disabled"
+            >
+              ไม่มีข้อมูล
+            </div>
           </VCardText>
         </VCard>
       </VCol>
@@ -632,7 +685,10 @@ onBeforeUnmount(() => {
                 size="64"
               />
             </div>
-            <div v-else>
+            <div
+              v-else-if="reportData.length > 0"
+              class="table-responsive"
+            >
               <VTable>
                 <thead>
                   <tr>
@@ -656,16 +712,6 @@ onBeforeUnmount(() => {
                     <td class="text-end">{{ item.cancel_count }}</td>
                     <td class="text-end">{{ item.reject_count }}</td>
                   </tr>
-                  <tr
-                    v-if="reportData.length === 0"
-                  >
-                    <td
-                      colspan="6"
-                      class="text-center text-disabled"
-                    >
-                      ไม่มีข้อมูล
-                    </td>
-                  </tr>
                 </tbody>
                 <tfoot>
                   <tr class="font-weight-bold bg-yellow-lighten-5">
@@ -678,6 +724,22 @@ onBeforeUnmount(() => {
                   </tr>
                 </tfoot>
               </VTable>
+            </div>
+            <div
+              v-else
+              class="text-center py-8"
+            >
+              <VIcon
+                size="64"
+                icon="tabler-table-off"
+                class="text-disabled mb-4"
+              />
+              <div class="text-h6 mb-2">
+                ไม่มีข้อมูล
+              </div>
+              <div class="text-body-2 text-disabled">
+                ไม่พบข้อมูลการใช้งานห้องในช่วงเวลานี้
+              </div>
             </div>
           </VCardText>
         </VCard>
@@ -719,6 +781,127 @@ onBeforeUnmount(() => {
 :deep(.daterangepicker) {
   z-index: 9999 !important;
   display: block !important;
+}
+
+/* Table Styling - Same as bookings/list */
+.table-responsive {
+  overflow-x: auto;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.v-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Table Header */
+.v-table thead tr {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.v-table thead th {
+  color: white !important;
+  font-weight: 700 !important;
+  font-size: 0.875rem;
+  text-align: left;
+  padding: 16px 12px !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 2px solid #e0e0e0;
+  white-space: nowrap;
+}
+
+.v-table thead th:last-child {
+  border-right: none;
+}
+
+/* Table Body */
+.v-table tbody tr {
+  transition: background-color 0.2s ease;
+}
+
+.v-table tbody tr:nth-child(odd) {
+  background-color: #ffffff;
+}
+
+.v-table tbody tr:nth-child(even) {
+  background-color: #f9fafb;
+}
+
+.v-table tbody tr:hover {
+  background-color: #f0f4ff !important;
+  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.1);
+}
+
+.v-table tbody td {
+  padding: 14px 12px !important;
+  border-right: 1px solid #e5e7eb;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 0.875rem;
+  color: #374151;
+  vertical-align: middle;
+}
+
+.v-table tbody td:last-child {
+  border-right: none;
+}
+
+.v-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Room Column */
+.v-table tbody td:first-child {
+  font-weight: 500;
+  color: #111827;
+  min-width: 150px;
+}
+
+/* Number Columns */
+.v-table tbody td.text-end {
+  font-weight: 500;
+  color: #667eea;
+  text-align: right;
+}
+
+/* Table Footer */
+.v-table tfoot tr {
+  background-color: #fff9e6 !important;
+}
+
+.v-table tfoot th {
+  font-weight: 700 !important;
+  padding: 16px 12px !important;
+  border-top: 2px solid #e0e0e0;
+  border-right: 1px solid #e5e7eb;
+  color: #111827 !important;
+}
+
+.v-table tfoot th:last-child {
+  border-right: none;
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+  .v-table thead th,
+  .v-table tbody td,
+  .v-table tfoot th {
+    padding: 10px 8px !important;
+    font-size: 0.8125rem;
+  }
+}
+
+/* Loading State */
+.text-center.py-8 {
+  padding: 3rem 1rem;
+}
+
+/* Empty State Icon */
+.v-icon[size="64"] {
+  opacity: 0.3;
 }
 </style>
 

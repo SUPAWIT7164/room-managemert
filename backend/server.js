@@ -46,6 +46,15 @@ app.use(session({
 // Static files for uploads
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
+// Static files for processed images
+app.use('/processed-images', express.static(path.join(__dirname, 'storage/processed_images'), {
+    setHeaders: (res, filePath) => {
+        // Set CORS headers for images
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+    }
+}));
+
 // Import Routes
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
@@ -62,6 +71,9 @@ const reportRoutes = require('./routes/reportRoutes');
 const quotaRoutes = require('./routes/quotaRoutes');
 const faceRoutes = require('./routes/faceRoutes');
 const cctvRoutes = require('./routes/cctvRoutes');
+const serviceUserRoutes = require('./routes/serviceUserRoutes');
+const environmentRoutes = require('./routes/environmentRoutes');
+const energyRoutes = require('./routes/energyRoutes');
 
 // Use Routes
 app.use('/api/auth', authRoutes);
@@ -79,6 +91,9 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/quotas', quotaRoutes);
 app.use('/api/face', faceRoutes);
 app.use('/api/cctv', cctvRoutes);
+app.use('/api/service-users', serviceUserRoutes);
+app.use('/api/environment', environmentRoutes);
+app.use('/api/energy', energyRoutes);
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {

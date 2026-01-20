@@ -117,12 +117,15 @@ const hideTitleAndIcon = configStore.isVerticalNavMini(isHovered)
             v-bind="layoutConfig.icons.verticalNavPinned"
             @click="configStore.isVerticalNavCollapsed = !configStore.isVerticalNavCollapsed"
           />
-          <Component
-            :is="layoutConfig.app.iconRenderer || 'div'"
-            class="d-lg-none"
-            v-bind="layoutConfig.icons.close"
+          <IconBtn
+            class="d-lg-none nav-close-btn"
             @click="toggleIsOverlayNavActive(false)"
-          />
+          >
+            <VIcon
+              :icon="layoutConfig.icons.close.icon"
+              size="22"
+            />
+          </IconBtn>
         </div>
       </slot>
     </div>
@@ -215,6 +218,24 @@ const hideTitleAndIcon = configStore.isVerticalNavMini(isHovered)
           &.nav-unpin {
             display: none !important;
           }
+        }
+      }
+
+      .nav-close-btn {
+        transition: all 0.2s ease;
+        border-radius: 8px;
+        
+        &:hover {
+          background-color: rgba(var(--v-theme-error), 0.1) !important;
+          transform: scale(1.1);
+          
+          :deep(.v-icon) {
+            color: rgb(var(--v-theme-error)) !important;
+          }
+        }
+        
+        :deep(.v-icon) {
+          transition: color 0.2s ease;
         }
       }
     }

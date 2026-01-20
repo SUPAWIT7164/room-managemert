@@ -26,7 +26,7 @@ export const setupGuards = router => {
          */
     if (to.meta.unauthenticatedOnly) {
       if (isLoggedIn)
-        return '/dashboard'
+        return '/bookings/calendar'
       else
         return undefined
     }

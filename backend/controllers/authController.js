@@ -370,7 +370,7 @@ class AuthController {
         try {
             // For now, return a placeholder response
             // In production, this should redirect to Microsoft OAuth login page
-            const redirectUri = req.query.redirectUri || '/dashboard';
+            const redirectUri = req.query.redirectUri || '/bookings/calendar';
             const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:8080';
             
             // TODO: Implement actual Microsoft OAuth flow

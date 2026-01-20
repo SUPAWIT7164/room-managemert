@@ -1,11 +1,43 @@
 <script setup>
+import { computed, ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import api from '@/utils/api'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
 // Get user data from auth store
 const userData = computed(() => authStore.user)
+
+// Face image from face registration
+const faceImage = ref(null)
+
+// Load face image from API
+const loadFaceImage = async () => {
+  try {
+    const response = await api.get('/face')
+    if (response.data.success && response.data.data?.image) {
+      faceImage.value = response.data.data.image
+    }
+  } catch (error) {
+    // Silently fail if face image doesn't exist
+    console.log('Face image not found or error loading:', error.message)
+    faceImage.value = null
+  }
+}
+
+// Load face image on mount
+onMounted(() => {
+  if (authStore.isAuthenticated) {
+    loadFaceImage()
+  }
+})
+
+// Get the image to display (prioritize face image, then photo, then null)
+const displayImage = computed(() => {
+  return faceImage.value || userData.value?.photo || null
+})
 
 const logout = async () => {
   // Use auth store logout
@@ -18,91 +50,104 @@ const logout = async () => {
 
 <template>
   <div
-    v-if="userData"
-    class="vertical-nav-user-profile-wrapper"
+    v-if="authStore.isAuthenticated"
+    class="vertical-nav-user-profile-wrapper pc-user-card"
   >
-    <VDivider class="mb-3" />
+    <VDivider class="mb-0" />
     
-    <div class="d-flex align-center gap-3 px-4 py-3">
-      <VBadge
-        dot
-        bordered
-        location="bottom right"
-        offset-x="2"
-        offset-y="2"
-        color="success"
-      >
-        <VAvatar
-          size="40"
-          :color="!(userData && userData.avatar) ? 'primary' : undefined"
-          :variant="!(userData && userData.avatar) ? 'tonal' : undefined"
-        >
-          <VImg
-            v-if="userData && userData.avatar"
-            :src="userData.avatar"
-          />
-          <VIcon
-            v-else
-            icon="tabler-user"
-          />
-        </VAvatar>
-      </VBadge>
+    <VCard
+      class="pc-user-card-inner"
+      variant="flat"
+      rounded="0"
+    >
+      <VCardText class="pa-4">
+        <div class="d-flex align-center">
+          <div class="flex-shrink-0 me-3">
+            <VAvatar
+              size="45"
+              :color="!displayImage ? 'primary' : undefined"
+              :variant="!displayImage ? 'tonal' : undefined"
+              class="profile-round-image"
+            >
+              <VImg
+                v-if="displayImage"
+                :src="displayImage"
+                alt="รูปผู้ใช้"
+              />
+              <VIcon
+                v-else
+                icon="tabler-user"
+                size="24"
+              />
+            </VAvatar>
+          </div>
 
-      <div class="flex-grow-1">
-        <h6 class="text-sm font-weight-medium text-high-emphasis">
-          {{ userData.fullName || userData.username || userData.name }}
-        </h6>
-        <span class="text-xs text-capitalize text-disabled">
-          {{ userData.role === 'admin' ? 'ผู้ดูแลระบบ' : userData.role === 'approver' ? 'ผู้อนุมัติ' : 'ผู้ใช้งาน' }}
-        </span>
-      </div>
+          <div class="flex-grow-1">
+            <VMenu
+              location="top end"
+              offset="8px"
+            >
+              <template #activator="{ props }">
+                <div
+                  v-bind="props"
+                  class="d-flex align-center cursor-pointer"
+                >
+                  <div class="flex-grow-1 me-2">
+                    <h6 class="text-sm font-weight-medium mb-0">
+                      {{ userData?.name || userData?.fullName || userData?.username || 'ผู้ใช้' }}
+                    </h6>
+                    <small class="text-xs text-disabled">
+                      {{ userData?.email || '' }}
+                    </small>
+                  </div>
+                  <div class="flex-shrink-0">
+                    <VIcon
+                      icon="tabler-chevron-down"
+                      size="18"
+                    />
+                  </div>
+                </div>
+              </template>
 
-      <VMenu
-        activator="parent"
-        width="200"
-        location="top end"
-        offset="8px"
-      >
-        <VList density="compact">
-          <VListItem
-            prepend-icon="tabler-user"
-            title="โปรไฟล์"
-            to="/profile"
-          />
-          <VListItem
-            prepend-icon="tabler-settings"
-            title="ตั้งค่า"
-            to="/settings"
-          />
-          <VDivider class="my-1" />
-          <VListItem
-            prepend-icon="tabler-logout"
-            title="ออกจากระบบ"
-            class="text-error"
-            @click="logout"
-          />
-        </VList>
-      </VMenu>
-      
-      <VBtn
-        icon
-        size="small"
-        variant="text"
-      >
-        <VIcon
-          icon="tabler-dots-vertical"
-          size="20"
-        />
-      </VBtn>
-    </div>
+              <VList
+                density="compact"
+                min-width="200"
+              >
+                <VListItem
+                  prepend-icon="tabler-logout"
+                  title="ออกจากระบบ"
+                  class="text-error"
+                  @click="logout"
+                />
+              </VList>
+            </VMenu>
+          </div>
+        </div>
+      </VCardText>
+    </VCard>
   </div>
 </template>
 
 <style lang="scss" scoped>
 .vertical-nav-user-profile-wrapper {
   margin-top: auto;
-  background-color: rgba(var(--v-theme-surface));
-  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  
+  .pc-user-card-inner {
+    background-color: rgba(var(--v-theme-surface));
+    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  }
+  
+  .profile-round-image {
+    border-radius: 50%;
+  }
+  
+  .cursor-pointer {
+    cursor: pointer;
+    
+    &:hover {
+      opacity: 0.8;
+    }
+  }
 }
 </style>
 

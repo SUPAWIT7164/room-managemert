@@ -21,6 +21,22 @@ const bookings = ref([])
 const rooms = ref([])
 const authorizedRooms = ref([])
 
+// Pagination
+const pagination = ref({
+  page: 1,
+  limit: 10,
+  total: 0,
+  totalPages: 0
+})
+
+// Entries per page options
+const itemsPerPageOptions = [
+  { value: 10, title: '10' },
+  { value: 25, title: '25' },
+  { value: 50, title: '50' },
+  { value: 100, title: '100' },
+]
+
 // Filters
 const selectedRoomId = ref(null)
 const searchQuery = ref('')
@@ -67,14 +83,23 @@ const initializeDateRangePicker = () => {
         window.moment = window.moment || moment
       }
       
-      // Ensure jQuery is available
-      if (typeof $ === 'undefined' || typeof window.$ === 'undefined') {
+      // Ensure jQuery is available globally
+      if (typeof window !== 'undefined') {
+        window.$ = window.$ || $
+        window.jQuery = window.jQuery || $
+      }
+      
+      // Check if jQuery is available
+      const jQueryAvailable = typeof $ !== 'undefined' || (typeof window !== 'undefined' && typeof window.$ !== 'undefined')
+      if (!jQueryAvailable) {
         console.error('jQuery is not available')
         setTimeout(() => tryInitialize(retries + 1), 200)
         return
       }
       
-      const $input = $(inputElement)
+      // Use window.$ if available, otherwise use imported $
+      const jQuery = (typeof window !== 'undefined' && window.$) || $
+      const $input = jQuery(inputElement)
       
       // Check if jQuery wrapped the element properly
       if ($input.length === 0) {
@@ -109,6 +134,7 @@ const initializeDateRangePicker = () => {
       }, (start, end) => {
         startDate.value = start.format('YYYY-MM-DD')
         endDate.value = end.format('YYYY-MM-DD')
+        pagination.value.page = 1
         fetchBookings()
       })
       
@@ -166,13 +192,33 @@ const checkAuthorizedRooms = async () => {
 const fetchBookings = async () => {
   loading.value = true
   try {
-    const params = {}
+    const params = {
+      page: pagination.value.page,
+      limit: pagination.value.limit,
+    }
     if (startDate.value) params.start_date = startDate.value
     if (endDate.value) params.end_date = endDate.value
     if (selectedRoomId.value) params.room_id = selectedRoomId.value
 
+    console.log('[BookingsList] Fetching bookings with params:', params)
     const response = await api.get('/bookings', { params })
-    bookings.value = response.data.data || []
+    
+    if (response.data.success) {
+      bookings.value = response.data.data || []
+      console.log('[BookingsList] Received bookings:', bookings.value.length, 'items')
+      console.log('[BookingsList] Pagination from server:', response.data.pagination)
+      
+      if (response.data.pagination) {
+        // Use pagination from server (it should match what we sent)
+        pagination.value = {
+          ...pagination.value,
+          ...response.data.pagination
+        }
+        console.log('[BookingsList] Updated pagination:', pagination.value)
+      }
+    } else {
+      bookings.value = []
+    }
   } catch (error) {
     console.error('Error fetching bookings:', error)
     bookings.value = []
@@ -181,7 +227,7 @@ const fetchBookings = async () => {
   }
 }
 
-// Filter bookings by search query
+// Filter bookings by search query (client-side filtering for search only)
 const filteredBookings = computed(() => {
   if (!searchQuery.value) return bookings.value
   
@@ -195,6 +241,22 @@ const filteredBookings = computed(() => {
     )
   })
 })
+
+// Handle page change
+const handlePageChange = (page) => {
+  pagination.value.page = page
+  fetchBookings()
+}
+
+// Handle items per page change
+const handleItemsPerPageChange = (value) => {
+  // Handle both object and primitive value
+  const newLimit = typeof value === 'object' ? value.value : parseInt(value, 10)
+  console.log('[BookingsList] Changing items per page to:', newLimit, 'from value:', value)
+  pagination.value.limit = newLimit
+  pagination.value.page = 1 // Reset to first page
+  fetchBookings()
+}
 
 // Format date
 const formatDate = (dateString) => {
@@ -425,7 +487,8 @@ const handleDateRangeClick = (event) => {
   event.preventDefault()
   event.stopPropagation()
   if (dateRangeInput.value) {
-    const $input = $(dateRangeInput.value)
+    const jQuery = (typeof window !== 'undefined' && window.$) || $
+    const $input = jQuery(dateRangeInput.value)
     if ($input.data('daterangepicker')) {
       $input.data('daterangepicker').show()
     } else {
@@ -439,11 +502,13 @@ const handleDateRangeClick = (event) => {
 const clearFilters = () => {
   selectedRoomId.value = null
   searchQuery.value = ''
+  pagination.value.page = 1 // Reset to first page
   initDateRange()
   
   // Update daterangepicker
   if (dateRangeInput.value) {
-    const $input = $(dateRangeInput.value)
+    const jQuery = (typeof window !== 'undefined' && window.$) || $
+    const $input = jQuery(dateRangeInput.value)
     if ($input.data('daterangepicker')) {
       const picker = $input.data('daterangepicker')
       picker.setStartDate(moment(startDate.value))
@@ -455,9 +520,11 @@ const clearFilters = () => {
 }
 
 onMounted(async () => {
-  // Ensure moment is available globally before using daterangepicker
+  // Ensure moment and jQuery are available globally before using daterangepicker
   if (typeof window !== 'undefined') {
-    window.moment = moment
+    window.moment = window.moment || moment
+    window.$ = window.$ || $
+    window.jQuery = window.jQuery || $
   }
   
   moment.locale('th')
@@ -475,7 +542,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   // Destroy daterangepicker
   if (dateRangeInput.value) {
-    const $input = $(dateRangeInput.value)
+    const jQuery = (typeof window !== 'undefined' && window.$) || $
+    const $input = jQuery(dateRangeInput.value)
     if ($input.data('daterangepicker')) {
       $input.data('daterangepicker').remove()
     }
@@ -809,13 +877,13 @@ onBeforeUnmount(() => {
                       clearable
                       prepend-inner-icon="tabler-door"
                       class="filter-input"
-                      @update:model-value="fetchBookings"
+                      @update:model-value="() => { pagination.page = 1; fetchBookings(); }"
                     >
                       <template #prepend-item>
                         <VListItem
                           title="ทั้งหมด"
                           prepend-icon="tabler-checkbox"
-                          @click="selectedRoomId = null; fetchBookings()"
+                          @click="selectedRoomId = null; pagination.page = 1; fetchBookings()"
                         />
                       </template>
                     </VSelect>
@@ -860,6 +928,28 @@ onBeforeUnmount(() => {
                 </div>
               </VCardText>
             </VCard>
+
+            <!-- Entries per page and table header -->
+            <div
+              v-if="!loading"
+              class="d-flex align-center justify-space-between mb-4"
+            >
+              <div class="d-flex align-center gap-2 flex-wrap">
+                <span class="text-body-2 text-medium-emphasis">แสดงผล:</span>
+                <VSelect
+                  :model-value="pagination.limit"
+                  :items="itemsPerPageOptions"
+                  item-title="title"
+                  item-value="value"
+                  variant="outlined"
+                  density="comfortable"
+                  style="min-width: 100px; max-width: 120px;"
+                  hide-details
+                  @update:model-value="handleItemsPerPageChange"
+                />
+                <span class="text-body-2 text-medium-emphasis">รายการต่อหน้า</span>
+              </div>
+            </div>
 
             <!-- Loading -->
             <div
@@ -975,6 +1065,49 @@ onBeforeUnmount(() => {
                 {{ searchQuery || selectedRoomId ? 'ไม่พบข้อมูลที่ตรงกับการกรองนี้' : 'ยังไม่มีการจองในระบบ' }}
               </div>
             </div>
+
+            <!-- Pagination -->
+            <VCardActions
+              v-if="!loading && filteredBookings.length > 0 && pagination.totalPages > 0"
+              class="px-4 py-3"
+            >
+              <div class="text-caption text-disabled">
+                แสดงผล {{ ((pagination.page - 1) * pagination.limit) + 1 }} ถึง {{ Math.min(pagination.page * pagination.limit, pagination.total) }} จาก {{ pagination.total }} รายการ
+              </div>
+              <VSpacer />
+              <div class="d-flex align-center gap-2">
+                <VBtn
+                  icon
+                  variant="text"
+                  size="small"
+                  :disabled="pagination.page === 1"
+                  @click="handlePageChange(pagination.page - 1)"
+                >
+                  <VIcon icon="tabler-chevron-left" />
+                </VBtn>
+                <div class="d-flex align-center gap-1">
+                  <VBtn
+                    v-for="page in pagination.totalPages"
+                    :key="page"
+                    :variant="pagination.page === page ? 'elevated' : 'text'"
+                    :color="pagination.page === page ? 'primary' : 'default'"
+                    size="small"
+                    @click="handlePageChange(page)"
+                  >
+                    {{ page }}
+                  </VBtn>
+                </div>
+                <VBtn
+                  icon
+                  variant="text"
+                  size="small"
+                  :disabled="pagination.page === pagination.totalPages"
+                  @click="handlePageChange(pagination.page + 1)"
+                >
+                  <VIcon icon="tabler-chevron-right" />
+                </VBtn>
+              </div>
+            </VCardActions>
           </VCardText>
         </VCard>
       </VCol>

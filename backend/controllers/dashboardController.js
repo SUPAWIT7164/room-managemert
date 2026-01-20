@@ -31,6 +31,29 @@ class DashboardController {
                 Visitor.count({ date: today })
             ]);
 
+            // Get room availability
+            const rooms = await Room.findAll({ disable: 0 });
+            const now = new Date();
+            
+            const roomAvailability = await Promise.all(
+                rooms.map(async (room) => {
+                    const bookings = await Room.getAvailability(room.id, today);
+                    const isAvailable = bookings.length === 0 || !bookings.some(b => {
+                        const start = new Date(b.start_time);
+                        const end = new Date(b.end_time);
+                        return now >= start && now <= end && (b.status === 'approved' || b.status === 'pending');
+                    });
+                    
+                    return {
+                        id: room.id,
+                        name: room.name,
+                        building_name: room.building_name || '',
+                        area_name: room.area_name || '',
+                        isAvailable: isAvailable
+                    };
+                })
+            );
+
             res.json({
                 success: true,
                 data: {
@@ -42,7 +65,8 @@ class DashboardController {
                     todayBookingsCount: todayBookings.length,
                     todayBookings: todayBookings.filter(b => b.status === 'approved' || b.status === 'pending'),
                     approvedBookings,
-                    todayVisitors
+                    todayVisitors,
+                    roomAvailability: roomAvailability
                 }
             });
         } catch (error) {

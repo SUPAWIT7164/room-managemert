@@ -91,19 +91,20 @@ const availableRooms = computed(() => {
 // Floor Plan Edit States
 const floorPlanEditMode = ref(false)
 const floorPlanAreas = ref([
-  { id: 1, name: 'Zone A', icon: 'tabler-box', top: 15, left: 8, width: 25, height: 30 },
-  { id: 2, name: 'Zone B', icon: 'tabler-layout-grid', top: 20, left: 38, width: 28, height: 40 },
-  { id: 3, name: 'Zone C', icon: 'tabler-home', top: 25, left: 70, width: 22, height: 35 },
-  { id: 4, name: 'Zone D', icon: 'tabler-square', top: 55, left: 8, width: 25, height: 30 },
-  { id: 5, name: 'Zone E', icon: 'tabler-apps', top: 60, left: 38, width: 28, height: 25 },
+  { id: 1, name: 'Mercury', icon: 'tabler-box', top: 15, left: 8, width: 25, height: 30 },
+  { id: 2, name: 'Earth', icon: 'tabler-layout-grid', top: 20, left: 38, width: 28, height: 40 },
+  { id: 3, name: 'Jupiter', icon: 'tabler-home', top: 25, left: 70, width: 22, height: 35 },
+  { id: 4, name: 'Mars', icon: 'tabler-square', top: 55, left: 8, width: 25, height: 30 },
+  { id: 5, name: 'Venus', icon: 'tabler-apps', top: 60, left: 38, width: 28, height: 25 },
 ])
 
 // Mapping between area names and specific room names (for areas not yet connected to database)
 const areaRoomMapping = {
-  'Zone B': 'ห้องประชุม Earth',
-  'Zone C': 'ห้องประชุม Jupiter',
-  'Zone D': 'ห้องประชุม Mars',
-  'Zone E': 'ห้องประชุม Venus',
+  'Mercury': 'ห้องประชุม Mercury',
+  'Earth': 'ห้องประชุม Earth',
+  'Jupiter': 'ห้องประชุม Jupiter',
+  'Mars': 'ห้องประชุม Mars',
+  'Venus': 'ห้องประชุม Venus',
 }
 const selectedAreaForEdit = ref(null)
 const editingAreaName = ref(null)
@@ -115,8 +116,10 @@ const dragAreaStart = ref({ x: 0, y: 0 })
 
 // System Control States
 const showSystemControlDialog = ref(false)
+const showConfirmSystemControlDialog = ref(false) // Second confirmation dialog
 const systemControlAction = ref(null) // 'turnOn' or 'turnOff'
 const systemControlLoading = ref(false)
+const systemControlTargetRoomId = ref(null) // Store which room button was clicked
 const floorDeviceStates = ref({
   light: [],
   ac: [],
@@ -134,6 +137,7 @@ const resizeSystemControlStart = ref({ x: 0, y: 0, width: 0, height: 0 })
 // Per-room device states (for individual room control buttons)
 const roomDeviceStates = ref({}) // { roomId: { light: [], ac: [], erv: [] } }
 const loadingRoomStates = ref({}) // { roomId: true/false }
+const roomStatesRefreshInterval = ref(null) // Interval for auto-refreshing room states
 
 // Per-room system control button positions
 const roomControlPositions = ref({}) // { roomId: { top: number, left: number } }
@@ -180,13 +184,44 @@ const areaRoomsMap = computed(() => {
   const map = {}
   if (!selectedBuilding.value || !selectedFloor.value) return map
   
+  console.log('Computing areaRoomsMap...')
+  console.log('Available rooms:', rooms.value.map(r => ({ id: r.id, name: r.name })))
+  
   floorPlanAreas.value.forEach(area => {
     let room = null
     
     // Check if area has room mapping
     if (areaRoomMapping[area.name]) {
       const roomName = areaRoomMapping[area.name]
+      console.log(`Looking for room: ${roomName} for area: ${area.name}`)
+      
+      // Try exact match first
       room = rooms.value.find(r => r.name === roomName)
+      
+      // If not found, try partial match (case insensitive) for Mercury or any room name
+      if (!room) {
+        const searchTerm = roomName.toLowerCase()
+        room = rooms.value.find(r => {
+          if (!r.name) return false
+          const roomNameLower = r.name.toLowerCase()
+          return roomNameLower.includes(searchTerm) || searchTerm.includes(roomNameLower)
+        })
+      }
+      
+      // If still not found and looking for Mercury, try any variation
+      if (!room && roomName.toLowerCase().includes('mercury')) {
+        room = rooms.value.find(r => {
+          if (!r.name) return false
+          return r.name.toLowerCase().includes('mercury')
+        })
+      }
+      
+      if (room) {
+        console.log(`Found room: ${room.name} (ID: ${room.id}) for area: ${area.name}`)
+      } else {
+        console.warn(`Room not found for area: ${area.name}, searched for: ${roomName}`)
+        console.warn(`Available room names:`, rooms.value.map(r => r.name))
+      }
     } else {
       // Find room from database area
       const dbArea = areas.value.find(a => {
@@ -207,6 +242,9 @@ const areaRoomsMap = computed(() => {
     
     if (room) {
       map[area.id] = room
+      console.log(`Mapped area ${area.name} to room ${room.name} (ID: ${room.id})`)
+    } else {
+      console.warn(`No room found for area ${area.name}`)
     }
   })
   
@@ -1585,27 +1623,16 @@ const loadRoomDeviceStates = async (roomId) => {
   }
 }
 
-// Toggle system control for a specific room
-const toggleRoomSystemControl = async (roomId) => {
-  const currentState = isRoomSystemsOn(roomId)
-  const newState = !currentState
+// Toggle system control for a specific room (show dialog first)
+const toggleRoomSystemControl = (roomId) => {
+  // Store the target room ID
+  systemControlTargetRoomId.value = roomId
   
-  // Control all devices in the room
-  try {
-    const deviceTypes = ['light', 'ac', 'erv']
-    const controlPromises = deviceTypes.map(type => {
-      return api.post(`/rooms/${roomId}/devices/${type}`, {
-        status: newState
-      })
-    })
-    
-    await Promise.all(controlPromises)
-    
-    // Reload room device states
-    await loadRoomDeviceStates(roomId)
-  } catch (error) {
-    console.error(`Error toggling systems for room ${roomId}:`, error)
-  }
+  // Don't set action yet - let user choose in dialog
+  systemControlAction.value = null
+  
+  // Show confirmation dialog
+  showSystemControlDialog.value = true
 }
 
 // Load device states for all rooms in floor plan
@@ -1616,6 +1643,30 @@ const loadAllRoomDeviceStates = async () => {
   loadRoomControlPositions()
 }
 
+// Start auto-refresh for room device states
+const startRoomStatesAutoRefresh = () => {
+  // Clear existing interval if any
+  if (roomStatesRefreshInterval.value) {
+    clearInterval(roomStatesRefreshInterval.value)
+  }
+  
+  // Set up new interval to refresh every 5 seconds
+  roomStatesRefreshInterval.value = setInterval(async () => {
+    if (showFloorPlan.value) {
+      console.log('Auto-refreshing room device states...')
+      await loadAllRoomDeviceStates()
+    }
+  }, 5000) // Refresh every 5 seconds
+}
+
+// Stop auto-refresh for room device states
+const stopRoomStatesAutoRefresh = () => {
+  if (roomStatesRefreshInterval.value) {
+    clearInterval(roomStatesRefreshInterval.value)
+    roomStatesRefreshInterval.value = null
+  }
+}
+
 // Load room control button positions from localStorage
 const loadRoomControlPositions = () => {
   if (!selectedBuilding.value || !selectedFloor.value) return
@@ -1623,27 +1674,50 @@ const loadRoomControlPositions = () => {
   const key = `roomControlPositions_${selectedBuilding.value}_${selectedFloor.value}`
   const saved = localStorage.getItem(key)
   
-  if (saved) {
-    try {
-      roomControlPositions.value = JSON.parse(saved)
-    } catch (error) {
-      console.error('Error loading room control positions:', error)
-    }
-  }
-  
-  // Initialize default positions for rooms that don't have saved positions
+  // Initialize default positions based on zones
   Object.values(areaRoomsMap.value).forEach(room => {
-    if (!roomControlPositions.value[room.id]) {
-      // Find area for this room
-      const area = floorPlanAreas.value.find(a => areaRoomsMap.value[a.id]?.id === room.id)
-      if (area) {
+    // Find area for this room
+    const area = floorPlanAreas.value.find(a => areaRoomsMap.value[a.id]?.id === room.id)
+    if (area) {
+      // Set default positions based on zone
+      let buttonLeft = Math.max(0, area.left - 5)
+      let buttonTop = area.top + area.height / 2 - 6
+      
+      if (area.name === 'Zone A') {
+        buttonLeft = 0 // Left edge for Zone A (Mercury)
+        buttonTop = area.top + area.height / 2 - 6 // Center vertically
+      } else if (area.name === 'Zone B') {
+        buttonLeft = 30 // Left of Zone B (Earth)
+        buttonTop = area.top + area.height / 2 - 6 // Center vertically
+      }
+      
+      // Only use saved position if it exists, otherwise use default
+      if (saved) {
+        try {
+          const savedPositions = JSON.parse(saved)
+          if (savedPositions[room.id]) {
+            roomControlPositions.value[room.id] = savedPositions[room.id]
+            return // Use saved position
+          }
+        } catch (error) {
+          console.error('Error loading room control positions:', error)
+        }
+      }
+      
+      // Use default position
+      if (!roomControlPositions.value[room.id]) {
         roomControlPositions.value[room.id] = {
-          top: area.top + area.height / 2 - 25,
-          left: area.left + area.width / 2 - 2
+          top: buttonTop,
+          left: buttonLeft
         }
       }
     }
   })
+  
+  // Save the default positions if they were just set
+  if (!saved) {
+    saveRoomControlPositions()
+  }
 }
 
 // Save room control button positions to localStorage
@@ -1659,6 +1733,11 @@ const getRoomControlPosition = (roomId) => {
   return roomControlPositions.value[roomId] || { top: 50, left: 50 }
 }
 
+// Drag handlers for room control buttons
+let currentDragRoomId = null
+let dragHandler = null
+let dragEndHandler = null
+
 // Start dragging a room control button
 const startDragRoomControl = (event, roomId) => {
   if (!floorPlanEditMode.value) return
@@ -1666,68 +1745,87 @@ const startDragRoomControl = (event, roomId) => {
   event.stopPropagation()
   event.preventDefault()
   draggingRoomControl.value = roomId
+  currentDragRoomId = roomId
   
-  const position = getRoomControlPosition(roomId)
-  const container = document.querySelector('.floor-plan-container')
-  if (!container) return
-  
-  const containerRect = container.getBoundingClientRect()
-  const buttonElement = event.currentTarget
-  const buttonRect = buttonElement.getBoundingClientRect()
+  // Get current position of the button (same as area drag)
+  const currentPos = getRoomControlPosition(roomId)
   
   dragRoomControlStart.value = {
     x: event.clientX,
     y: event.clientY,
-    top: (buttonRect.top - containerRect.top) / containerRect.height * 100,
-    left: (buttonRect.left - containerRect.left) / containerRect.width * 100,
+    left: currentPos.left,
+    top: currentPos.top,
   }
   
-  document.addEventListener('mousemove', (e) => onDragRoomControl(e, roomId))
-  document.addEventListener('mouseup', () => stopDragRoomControl(roomId))
+  // Create handlers
+  dragHandler = (e) => onDragRoomControl(e)
+  dragEndHandler = () => stopDragRoomControl()
+  
+  document.addEventListener('mousemove', dragHandler)
+  document.addEventListener('mouseup', dragEndHandler)
+  
+  // Prevent text selection
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'grabbing'
 }
 
-const onDragRoomControl = (event, roomId) => {
-  if (!draggingRoomControl.value || draggingRoomControl.value !== roomId) return
+const onDragRoomControl = (event) => {
+  if (!draggingRoomControl.value || !currentDragRoomId) return
   
   const container = document.querySelector('.floor-plan-container')
   if (!container) return
   
   const containerRect = container.getBoundingClientRect()
-  const deltaX = event.clientX - dragRoomControlStart.value.x
-  const deltaY = event.clientY - dragRoomControlStart.value.y
   
-  // Calculate new position in percentage
-  const buttonWidthPercent = 4 // Approximate button width as percentage
-  const buttonHeightPercent = 8 // Approximate button height as percentage
+  // Calculate delta from start position (same as area drag)
+  const deltaX = ((event.clientX - dragRoomControlStart.value.x) / containerRect.width) * 100
+  const deltaY = ((event.clientY - dragRoomControlStart.value.y) / containerRect.height) * 100
   
-  const deltaXPercent = (deltaX / containerRect.width) * 100
-  const deltaYPercent = (deltaY / containerRect.height) * 100
+  // Calculate new position (start position + delta)
+  let left = dragRoomControlStart.value.left + deltaX
+  let top = dragRoomControlStart.value.top + deltaY
   
-  let newLeft = dragRoomControlStart.value.left + deltaXPercent
-  let newTop = dragRoomControlStart.value.top + deltaYPercent
+  // Allow full range of movement (no strict constraints)
+  // Only prevent going too far outside container
+  left = Math.max(-5, Math.min(100, left))
+  top = Math.max(-5, Math.min(100, top))
   
-  // Constrain to container bounds (0-100%)
-  newLeft = Math.max(0, Math.min(100 - buttonWidthPercent, newLeft))
-  newTop = Math.max(0, Math.min(100 - buttonHeightPercent, newTop))
-  
-  roomControlPositions.value[roomId] = {
-    top: newTop,
-    left: newLeft
+  roomControlPositions.value[currentDragRoomId] = {
+    top: top,
+    left: left
   }
 }
 
-const stopDragRoomControl = (roomId) => {
-  if (draggingRoomControl.value === roomId) {
-    draggingRoomControl.value = null
+const stopDragRoomControl = () => {
+  if (draggingRoomControl.value) {
     saveRoomControlPositions()
+    draggingRoomControl.value = null
+    currentDragRoomId = null
   }
   
-  document.removeEventListener('mousemove', (e) => onDragRoomControl(e, roomId))
-  document.removeEventListener('mouseup', () => stopDragRoomControl(roomId))
+  if (dragHandler) {
+    document.removeEventListener('mousemove', dragHandler)
+    dragHandler = null
+  }
+  if (dragEndHandler) {
+    document.removeEventListener('mouseup', dragEndHandler)
+    dragEndHandler = null
+  }
+  
+  // Restore cursor and selection
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
 }
 
 const closeSystemControlDialog = () => {
+  showConfirmSystemControlDialog.value = false
   showSystemControlDialog.value = false
+  systemControlAction.value = null
+  systemControlTargetRoomId.value = null
+}
+
+const closeConfirmSystemControlDialog = () => {
+  showConfirmSystemControlDialog.value = false
   systemControlAction.value = null
 }
 
@@ -1914,24 +2012,39 @@ const confirmSystemControl = async () => {
     const areaName = selectedArea.value
     const isTurningOn = systemControlAction.value === 'turnOn'
     
-    // Fetch all rooms in the building/floor
-    const response = await api.get('/rooms')
-    const allRooms = response.data.data || response.data || []
+    let targetRooms = []
     
-    // Filter rooms by building and floor
-    let targetRooms = allRooms.filter(room => {
-      return room.building_id == buildingId && room.floor == floorNumber
-    })
-    
-    // If area is specified, filter by area
-    if (areaName) {
-      const targetArea = areas.value.find(a => a.name === areaName && a.building_id == buildingId && a.floor == floorNumber)
-      if (targetArea) {
-        targetRooms = targetRooms.filter(room => room.area_id === targetArea.id)
+    // If specific room is targeted, control only that room
+    if (systemControlTargetRoomId.value) {
+      // Find the specific room from areaRoomsMap
+      const targetRoom = Object.values(areaRoomsMap.value).find(room => room?.id === systemControlTargetRoomId.value)
+      if (targetRoom) {
+        targetRooms = [targetRoom]
+        console.log(`Targeting specific room: ${targetRoom.name} (ID: ${targetRoom.id})`)
+      } else {
+        console.warn(`Target room with ID ${systemControlTargetRoomId.value} not found`)
       }
+    } else {
+      // Otherwise, control all rooms in building/floor/area
+      // Fetch all rooms in the building/floor
+      const response = await api.get('/rooms')
+      const allRooms = response.data.data || response.data || []
+      
+      // Filter rooms by building and floor
+      targetRooms = allRooms.filter(room => {
+        return room.building_id == buildingId && room.floor == floorNumber
+      })
+      
+      // If area is specified, filter by area
+      if (areaName) {
+        const targetArea = areas.value.find(a => a.name === areaName && a.building_id == buildingId && a.floor == floorNumber)
+        if (targetArea) {
+          targetRooms = targetRooms.filter(room => room.area_id === targetArea.id)
+        }
+      }
+      
+      console.log(`Found ${targetRooms.length} rooms in Building ${buildingId}, Floor ${floorNumber}${areaName ? `, Area ${areaName}` : ''}`)
     }
-    
-    console.log(`Found ${targetRooms.length} rooms in Building ${buildingId}, Floor ${floorNumber}${areaName ? `, Area ${areaName}` : ''}`)
     
     // Control all systems (light, ac, erv) for each room
     const controlPromises = []
@@ -1974,6 +2087,12 @@ const confirmSystemControl = async () => {
     console.log('Refreshing device states...')
     await checkFloorDeviceStates()
     
+    // Refresh device states for all rooms in floor plan
+    console.log('Refreshing room device states...')
+    await loadAllRoomDeviceStates()
+    
+    // Close all dialogs
+    closeConfirmSystemControlDialog()
     closeSystemControlDialog()
   } catch (error) {
     console.error('Error controlling all systems:', error)
@@ -2051,6 +2170,11 @@ watch(() => route.query, async () => {
     await checkFloorDeviceStates()
     // Load device states for all rooms in floor plan
     await loadAllRoomDeviceStates()
+    // Start auto-refresh for room states
+    startRoomStatesAutoRefresh()
+  } else {
+    // Stop auto-refresh when not in floor plan view
+    stopRoomStatesAutoRefresh()
   }
 }, { immediate: true })
 
@@ -2112,6 +2236,8 @@ onMounted(async () => {
     await checkFloorDeviceStates()
     // Load device states for all rooms in floor plan
     await loadAllRoomDeviceStates()
+    // Start auto-refresh for room states
+    startRoomStatesAutoRefresh()
   }
 })
 
@@ -2135,6 +2261,9 @@ onBeforeUnmount(() => {
   document.removeEventListener('mouseup', stopResizeArea)
   document.removeEventListener('mousemove', onDragArea)
   document.removeEventListener('mouseup', stopDragArea)
+  
+  // Stop auto-refresh interval
+  stopRoomStatesAutoRefresh()
 })
 </script>
 
@@ -2415,6 +2544,7 @@ onBeforeUnmount(() => {
                   <div
                     v-if="areaRoomsMap[area.id]"
                     :key="`control-${area.id}`"
+                    :data-room-control="areaRoomsMap[area.id].id"
                     class="system-control-icon-wrapper"
                     :class="{ 
                       'system-on': isRoomSystemsOn(areaRoomsMap[area.id].id), 
@@ -3719,6 +3849,84 @@ onBeforeUnmount(() => {
     <!-- System Control Confirmation Dialog -->
     <VDialog
       v-model="showSystemControlDialog"
+      max-width="600"
+      persistent
+    >
+      <VCard>
+        <VCardTitle class="d-flex align-center gap-3">
+          <VIcon
+            icon="tabler-settings"
+            color="primary"
+            size="32"
+          />
+          <span class="text-h5">
+            ควบคุมระบบ
+          </span>
+        </VCardTitle>
+        
+        <VDivider />
+        
+        <VCardText class="pt-6">
+          <div class="text-body-1 mb-4">
+            <template v-if="systemControlTargetRoomId">
+              เลือกการควบคุมระบบใน
+              <strong>{{ areaRoomsMap[Object.keys(areaRoomsMap).find(key => areaRoomsMap[key]?.id === systemControlTargetRoomId)]?.name || 'ห้องนี้' }}</strong>
+            </template>
+            <template v-else>
+              เลือกการควบคุมระบบใน
+              <strong>Building {{ selectedBuilding }}, Floor {{ selectedFloor }}</strong>
+            </template>
+          </div>
+          <VAlert
+            type="info"
+            variant="tonal"
+            class="mb-0"
+          >
+            <div class="text-body-2">
+              <strong>หมายเหตุ:</strong>
+              การเปิดระบบจะเปิดเฉพาะอุปกรณ์ที่ปิดอยู่ 
+              การปิดระบบจะปิดอุปกรณ์ทั้งหมด (ไฟ, แอร์, ERV)
+            </div>
+          </VAlert>
+        </VCardText>
+
+        <VDivider />
+        
+        <VCardActions class="pa-4 d-flex gap-2">
+          <VBtn
+            color="default"
+            variant="outlined"
+            :disabled="systemControlLoading"
+            @click="closeSystemControlDialog"
+          >
+            ยกเลิก
+          </VBtn>
+          <VSpacer />
+          <VBtn
+            color="success"
+            variant="elevated"
+            :loading="systemControlLoading"
+            prepend-icon="tabler-power"
+            @click="systemControlAction = 'turnOn'; showSystemControlDialog = false; showConfirmSystemControlDialog = true"
+          >
+            เปิดระบบทั้งหมด
+          </VBtn>
+          <VBtn
+            color="error"
+            variant="elevated"
+            :loading="systemControlLoading"
+            prepend-icon="tabler-power-off"
+            @click="systemControlAction = 'turnOff'; showSystemControlDialog = false; showConfirmSystemControlDialog = true"
+          >
+            ปิดระบบทั้งหมด
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
+    <!-- System Control Confirmation Dialog -->
+    <VDialog
+      v-model="showConfirmSystemControlDialog"
       max-width="500"
       persistent
     >
@@ -3731,16 +3939,15 @@ onBeforeUnmount(() => {
           />
           <span class="text-h5">
             {{ systemControlAction === 'turnOn' ? 'เปิดระบบทั้งหมด' : 'ปิดระบบทั้งหมด' }}
-              </span>
+          </span>
         </VCardTitle>
         
         <VDivider />
         
         <VCardText class="pt-6">
           <div class="text-body-1 mb-4">
-            คุณต้องการ{{ systemControlAction === 'turnOn' ? 'เปิด' : 'ปิด' }}ระบบทั้งหมดใน
-            <strong>Building {{ selectedBuilding }}, Floor {{ selectedFloor }}</strong> หรือไม่?
-            </div>
+            คุณต้องการ{{ systemControlAction === 'turnOn' ? 'เปิด' : 'ปิด' }}ระบบทั้งหมดหรือไม่?
+          </div>
           <VAlert
             :type="systemControlAction === 'turnOn' ? 'info' : 'warning'"
             variant="tonal"
@@ -3748,10 +3955,13 @@ onBeforeUnmount(() => {
           >
             <div class="text-body-2">
               <strong>หมายเหตุ:</strong>
-              {{ systemControlAction === 'turnOn' 
-                ? 'การดำเนินการนี้จะเปิดระบบทั้งหมด (ไฟ, แอร์, ERV) ในทุกห้องของ Floor นี้' 
-                : 'การดำเนินการนี้จะปิดระบบทั้งหมด (ไฟ, แอร์, ERV) ในทุกห้องของ Floor นี้' }}
-          </div>
+              <template v-if="systemControlAction === 'turnOn'">
+                การดำเนินการนี้จะเปิดเฉพาะอุปกรณ์ที่ปิดอยู่ (ไฟ, แอร์, ERV)
+              </template>
+              <template v-else>
+                การดำเนินการนี้จะปิดอุปกรณ์ทั้งหมด (ไฟ, แอร์, ERV)
+              </template>
+            </div>
           </VAlert>
         </VCardText>
 
@@ -3763,7 +3973,7 @@ onBeforeUnmount(() => {
             color="default"
             variant="outlined"
             :disabled="systemControlLoading"
-            @click="closeSystemControlDialog"
+            @click="closeConfirmSystemControlDialog"
           >
             ยกเลิก
           </VBtn>
@@ -4739,6 +4949,33 @@ onBeforeUnmount(() => {
 }
 
 .system-control-icon-wrapper.system-off .system-control-label {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.system-control-room-name {
+  margin-top: 4px;
+  background: rgba(var(--v-theme-surface), 0.95);
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgb(var(--v-theme-on-surface));
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  transition: all 0.3s ease;
+  text-align: center;
+  white-space: nowrap;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.system-control-icon-wrapper.system-on .system-control-room-name {
+  background: rgba(var(--v-theme-warning), 0.1);
+  color: rgb(var(--v-theme-warning));
+}
+
+.system-control-icon-wrapper.system-off .system-control-room-name {
+  background: rgba(var(--v-theme-surface), 0.95);
   color: rgb(var(--v-theme-on-surface));
 }
 

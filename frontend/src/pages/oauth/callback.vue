@@ -18,7 +18,7 @@ onMounted(async () => {
   try {
     const token = route.query.token
     const userData = route.query.user
-    const redirectPath = route.query.redirect || '/'
+    const redirectPath = route.query.redirect || '/bookings/calendar'
 
     if (!token || !userData) {
       router.replace('/login?error=' + encodeURIComponent('ไม่ได้รับข้อมูลการเข้าสู่ระบบ'))
@@ -60,6 +60,8 @@ onMounted(async () => {
     </VCard>
   </div>
 </template>
+
+
 
 
 
