@@ -14,6 +14,17 @@ const quotaSettings = ref([])
 const editedValues = reactive({})
 const savingSettings = reactive({})
 
+// Dialog and Snackbar states
+const confirmDialog = ref(false)
+const confirmDialogTitle = ref('')
+const confirmDialogText = ref('')
+const confirmDialogSetting = ref(null)
+const loadingDialog = ref(false)
+const loadingDialogText = ref('')
+const snackbar = ref(false)
+const snackbarText = ref('')
+const snackbarColor = ref('success')
+
 const fetchQuotaSettings = async () => {
   loading.value = true
   try {
@@ -27,43 +38,86 @@ const fetchQuotaSettings = async () => {
     })
   } catch (error) {
     console.error('Error fetching quota settings:', error)
-    alert('ไม่สามารถโหลดข้อมูลการตั้งค่าโควตาได้: ' + (error.response?.data?.message || error.message))
+    showSnackbar('ไม่สามารถโหลดข้อมูลการตั้งค่าโควตาได้: ' + (error.response?.data?.message || error.message), 'error')
   } finally {
     loading.value = false
   }
 }
 
-const saveSetting = async (setting) => {
-  savingSettings[setting.id] = true
+const showSnackbar = (text, color = 'success') => {
+  snackbarText.value = text
+  snackbarColor.value = color
+  snackbar.value = true
+}
+
+const showConfirmDialog = (setting) => {
+  confirmDialogTitle.value = 'ยืนยันการเปลี่ยนแปลง?'
+  confirmDialogText.value = 'คุณต้องการบันทึกการเปลี่ยนแปลงหรือไม่'
+  confirmDialogSetting.value = setting
+  confirmDialog.value = true
+}
+
+const confirmSave = async () => {
+  const setting = confirmDialogSetting.value
+  confirmDialog.value = false
+  
+  // Show loading dialog
+  loadingDialogText.value = 'กำลังบันทึก...'
+  loadingDialog.value = true
+  
   try {
-    // Check if value has changed
-    if (editedValues[setting.id] === (setting.value || '')) {
-      alert('ไม่มีการเปลี่ยนแปลงค่า')
-      savingSettings[setting.id] = false
-      return
-    }
-    
     // Update single setting by slug
     const updates = {}
     updates[setting.slug] = editedValues[setting.id]
     
-    await api.post('/quotas/update', updates)
+    const response = await api.post('/quotas/update', updates)
     
-    // Update the setting in the list
-    const index = quotaSettings.value.findIndex(s => s.id === setting.id)
-    if (index !== -1) {
-      quotaSettings.value[index].value = editedValues[setting.id]
+    // Close loading dialog
+    loadingDialog.value = false
+    
+    // Check if response indicates success
+    if (response.data && response.data.success) {
+      // Update the setting in the list
+      const index = quotaSettings.value.findIndex(s => s.id === setting.id)
+      if (index !== -1) {
+        quotaSettings.value[index].value = editedValues[setting.id]
+      }
+      
+      // Show success message
+      showSnackbar('การตั้งค่าถูกบันทึกเรียบร้อยแล้ว', 'success')
+    } else {
+      // Response was successful but success flag is false
+      editedValues[setting.id] = setting.value || ''
+      showSnackbar('การบันทึกไม่สำเร็จ', 'error')
     }
-    
-    alert('บันทึกการตั้งค่าเรียบร้อยแล้ว')
   } catch (error) {
     console.error('Error saving quota setting:', error)
-    alert('เกิดข้อผิดพลาดในการบันทึก: ' + (error.response?.data?.message || error.message))
+    
+    // Close loading dialog
+    loadingDialog.value = false
+    
     // Revert to original value on error
     editedValues[setting.id] = setting.value || ''
+    
+    // Show error message
+    const errorMessage = error.response?.data?.message || error.message || 'เกิดข้อผิดพลาดในการบันทึก'
+    showSnackbar(errorMessage, 'error')
   } finally {
     savingSettings[setting.id] = false
   }
+}
+
+const saveSetting = async (setting) => {
+  // Check if value has changed
+  if (editedValues[setting.id] === (setting.value || '')) {
+    showSnackbar('ไม่มีการเปลี่ยนแปลงค่า', 'info')
+    return
+  }
+  
+  savingSettings[setting.id] = true
+  
+  // Show confirmation dialog
+  showConfirmDialog(setting)
 }
 
 const hasChanges = (setting) => {
@@ -192,6 +246,76 @@ onMounted(() => {
         </VCard>
       </VCol>
     </VRow>
+
+    <!-- Confirmation Dialog -->
+    <VDialog
+      v-model="confirmDialog"
+      max-width="400"
+    >
+      <VCard>
+        <VCardTitle class="text-h5">
+          {{ confirmDialogTitle }}
+        </VCardTitle>
+        <VCardText>
+          {{ confirmDialogText }}
+        </VCardText>
+        <VCardActions>
+          <VSpacer />
+          <VBtn
+            color="error"
+            variant="text"
+            @click="confirmDialog = false; savingSettings[confirmDialogSetting?.id] = false"
+          >
+            ยกเลิก
+          </VBtn>
+          <VBtn
+            color="primary"
+            variant="elevated"
+            @click="confirmSave"
+          >
+            ใช่, บันทึกเลย!
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
+
+    <!-- Loading Dialog -->
+    <VDialog
+      v-model="loadingDialog"
+      persistent
+      max-width="300"
+    >
+      <VCard>
+        <VCardText class="text-center pt-6">
+          <VProgressCircular
+            indeterminate
+            color="primary"
+            class="mb-4"
+          />
+          <div class="text-body-1">
+            {{ loadingDialogText }}
+          </div>
+        </VCardText>
+      </VCard>
+    </VDialog>
+
+    <!-- Snackbar for notifications -->
+    <VSnackbar
+      v-model="snackbar"
+      :color="snackbarColor"
+      :timeout="3000"
+      location="top"
+    >
+      {{ snackbarText }}
+      <template #actions>
+        <VBtn
+          variant="text"
+          @click="snackbar = false"
+        >
+          ปิด
+        </VBtn>
+      </template>
+    </VSnackbar>
   </div>
 </template>
 

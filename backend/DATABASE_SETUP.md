@@ -141,3 +141,4 @@ npm start
 - หากคุณต้องการใช้ SQL syntax เฉพาะของฐานข้อมูลใดฐานข้อมูลหนึ่ง คุณอาจต้องแก้ไขโค้ดใน models และ controllers
 - สำหรับ production environment แนะนำให้ใช้ connection pooling และตั้งค่า timeout ที่เหมาะสม
 
+

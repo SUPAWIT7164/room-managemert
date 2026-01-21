@@ -218,7 +218,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div>
+  <div class="invoice-page">
     <!-- Action Buttons (ไม่แสดงตอนพิมพ์) -->
     <VRow class="mb-4 no-print">
       <VCol cols="12">
@@ -250,7 +250,7 @@ onMounted(() => {
       v-if="tenant"
       class="invoice-card"
     >
-      <VCardText class="pa-8">
+      <VCardText class="pa-8 invoice-content">
         <!-- Header Section -->
         <div class="invoice-header mb-8">
           <div class="d-flex justify-space-between align-start mb-6">
@@ -366,7 +366,7 @@ onMounted(() => {
                   ค่าน้ำ
                 </td>
                 <td class="text-center">
-                  <span class="font-weight-medium">{{ formatCurrency(waterUsage) }} <span class="text-medium-emphasis">ลบ.ม.</span></span>
+                  <span class="font-weight-medium">{{ formatCurrency(tenant.waterUsage) }} <span class="text-medium-emphasis">ลบ.ม.</span></span>
                 </td>
                 <td class="text-center">
                   <span class="text-medium-emphasis">฿{{ formatCurrency(waterRate) }} / ลบ.ม.</span>
@@ -380,7 +380,7 @@ onMounted(() => {
                   ค่าไฟ
                 </td>
                 <td class="text-center">
-                  <span class="font-weight-medium">{{ formatCurrency(electricityUsage) }} <span class="text-medium-emphasis">kWh</span></span>
+                  <span class="font-weight-medium">{{ formatCurrency(tenant.electricityUsage) }} <span class="text-medium-emphasis">kWh</span></span>
                 </td>
                 <td class="text-center">
                   <span class="text-medium-emphasis">฿{{ formatCurrency(electricityRate) }} / kWh</span>
@@ -488,16 +488,176 @@ onMounted(() => {
 @media print {
   @page {
     size: A4 portrait;
-    margin: 20mm;
+    margin: 10mm;
   }
 
-  .no-print {
+  /* Reset body and html for print */
+  html,
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    background: white !important;
+    overflow: visible !important;
+  }
+
+  /* Hide no-print elements */
+  .no-print,
+  .no-print * {
     display: none !important;
+  }
+
+  /* Show invoice page content - ensure it's visible */
+  .invoice-page {
+    position: relative !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    page-break-inside: avoid;
+    page-break-after: avoid;
   }
 
   .invoice-card {
     box-shadow: none !important;
     border: none !important;
+    position: relative;
+    width: 100%;
+    page-break-inside: avoid;
+    page-break-after: avoid;
+  }
+
+  .invoice-card .v-card-text,
+  .invoice-content {
+    padding: 12px !important;
+  }
+
+  /* Prevent page breaks inside sections */
+  .invoice-header,
+  .tenant-info,
+  .expense-details,
+  .total-amount-text,
+  .signature-section {
+    page-break-inside: avoid;
+  }
+
+  /* Reduce spacing for print */
+  .invoice-header {
+    margin-bottom: 8px !important;
+    padding-bottom: 6px !important;
+  }
+
+  .invoice-header .mb-6 {
+    margin-bottom: 4px !important;
+  }
+
+  .invoice-header h1 {
+    font-size: 1.4rem !important;
+    margin-bottom: 2px !important;
+    line-height: 1.2 !important;
+  }
+
+  .invoice-header p {
+    font-size: 0.8rem !important;
+    margin-bottom: 1px !important;
+    line-height: 1.3 !important;
+  }
+
+  .tenant-info {
+    margin-bottom: 8px !important;
+  }
+
+  .tenant-info .v-card {
+    padding: 8px !important;
+  }
+
+  .tenant-info h3 {
+    font-size: 0.95rem !important;
+    margin-bottom: 4px !important;
+    line-height: 1.2 !important;
+  }
+
+  .tenant-info .mb-1 {
+    margin-bottom: 1px !important;
+  }
+
+  .tenant-info p {
+    font-size: 0.8rem !important;
+    line-height: 1.3 !important;
+  }
+
+  .expense-details {
+    margin-bottom: 8px !important;
+  }
+
+  .expense-details h3 {
+    font-size: 0.95rem !important;
+    margin-bottom: 4px !important;
+    line-height: 1.2 !important;
+  }
+
+  .total-amount-text {
+    margin-bottom: 8px !important;
+  }
+
+  .total-amount-text .v-card {
+    padding: 8px !important;
+  }
+
+  .total-amount-text p {
+    margin-bottom: 2px !important;
+    font-size: 0.8rem !important;
+    line-height: 1.3 !important;
+  }
+
+  .total-amount-text .text-h5 {
+    font-size: 0.95rem !important;
+    line-height: 1.3 !important;
+  }
+
+  .signature-section {
+    margin-top: 8px !important;
+  }
+
+  .signature-box {
+    min-height: 70px !important;
+    padding: 8px !important;
+  }
+
+  .signature-line {
+    margin-top: 20px !important;
+    width: 160px !important;
+  }
+
+  .signature-box p {
+    font-size: 0.75rem !important;
+    margin-bottom: 2px !important;
+    line-height: 1.3 !important;
+  }
+
+  .signature-box .mb-4 {
+    margin-bottom: 4px !important;
+  }
+
+  /* Override all mb-8 to smaller value */
+  .mb-8 {
+    margin-bottom: 8px !important;
+  }
+
+  .mb-6 {
+    margin-bottom: 4px !important;
+  }
+
+  .mb-4 {
+    margin-bottom: 4px !important;
+  }
+
+  .mb-2 {
+    margin-bottom: 2px !important;
+  }
+
+  .mb-1 {
+    margin-bottom: 1px !important;
   }
 
   body {
@@ -506,6 +666,47 @@ onMounted(() => {
 
   .v-card {
     box-shadow: none !important;
+  }
+
+  /* Reduce Vuetify component spacing */
+  .v-row {
+    margin: 0 !important;
+  }
+
+  .v-col {
+    padding: 2px !important;
+  }
+
+  .v-chip {
+    font-size: 0.7rem !important;
+    padding: 1px 6px !important;
+    height: auto !important;
+  }
+
+  /* Reduce text sizes */
+  .text-h3 {
+    font-size: 1.4rem !important;
+    line-height: 1.2 !important;
+  }
+
+  .text-h5 {
+    font-size: 0.95rem !important;
+    line-height: 1.2 !important;
+  }
+
+  .text-h6 {
+    font-size: 0.85rem !important;
+    line-height: 1.2 !important;
+  }
+
+  .text-body-1 {
+    font-size: 0.8rem !important;
+    line-height: 1.3 !important;
+  }
+
+  .text-body-2 {
+    font-size: 0.7rem !important;
+    line-height: 1.3 !important;
   }
 }
 
@@ -520,6 +721,13 @@ onMounted(() => {
 .invoice-header {
   border-bottom: 2px solid #e0e0e0;
   padding-bottom: 24px;
+}
+
+@media print {
+  .invoice-header {
+    border-bottom: 1px solid #e0e0e0;
+    padding-bottom: 6px;
+  }
 }
 
 /* Tenant Info */
@@ -574,21 +782,25 @@ onMounted(() => {
 /* Responsive table for print */
 @media print {
   .expense-table {
-    font-size: 0.85rem;
+    font-size: 0.7rem !important;
+    margin-bottom: 0 !important;
 
     thead th {
-      padding: 12px 8px !important;
-      font-size: 0.85rem !important;
+      padding: 6px 4px !important;
+      font-size: 0.7rem !important;
+      line-height: 1.2 !important;
     }
 
     tbody td {
-      padding: 12px 8px !important;
-      font-size: 0.85rem !important;
+      padding: 6px 4px !important;
+      font-size: 0.7rem !important;
+      line-height: 1.3 !important;
     }
 
     tfoot th {
-      padding: 16px 8px !important;
-      font-size: 1rem !important;
+      padding: 8px 4px !important;
+      font-size: 0.8rem !important;
+      line-height: 1.2 !important;
     }
   }
 }
@@ -616,10 +828,60 @@ onMounted(() => {
   margin-top: 60px;
 }
 
+@media print {
+  .signature-box {
+    min-height: 70px !important;
+    padding: 8px !important;
+  }
+
+  .signature-line {
+    margin-top: 20px !important;
+    width: 160px !important;
+  }
+}
+
 /* Screen Styles */
 @media screen {
   .invoice-card {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+}
+</style>
+
+<style lang="scss">
+/* Global Print Styles - Not Scoped */
+@media print {
+  /* Hide all layout components - navbar, sidebar, footer */
+  .v-navigation-drawer,
+  .v-app-bar,
+  .v-toolbar,
+  .v-footer,
+  .layout-navbar,
+  .layout-footer,
+  nav,
+  header:not(.invoice-header),
+  aside,
+  footer {
+    display: none !important;
+  }
+
+  /* Reset body for clean print */
+  html,
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  /* Show invoice page content - ensure it's visible */
+  .invoice-page {
+    display: block !important;
+    position: relative !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 }
 </style>
