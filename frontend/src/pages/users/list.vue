@@ -120,7 +120,8 @@ onMounted(() => {
                 color="primary"
               />
             </div>
-            <VTable v-else-if="users.length > 0">
+            <div v-else-if="users.length > 0" class="table-responsive">
+            <VTable>
               <thead>
                 <tr>
                   <th>ชื่อ</th>
@@ -189,6 +190,7 @@ onMounted(() => {
                 </tr>
               </tbody>
             </VTable>
+            </div>
             <div
               v-else
               class="text-center py-8"

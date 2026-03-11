@@ -41,16 +41,6 @@ onMounted(() => {
               />
               รายการอาคาร
             </span>
-            <VBtn
-              color="primary"
-              :to="{ name: 'buildings-create' }"
-            >
-              <VIcon
-                icon="tabler-plus"
-                class="me-2"
-              />
-              สร้างอาคารใหม่
-            </VBtn>
           </VCardTitle>
           <VCardText>
             <div v-if="loading">
@@ -59,7 +49,8 @@ onMounted(() => {
                 color="primary"
               />
             </div>
-            <VTable v-else-if="buildings.length > 0">
+            <div v-else-if="buildings.length > 0" class="table-responsive">
+            <VTable>
               <thead>
                 <tr>
                   <th>ชื่ออาคาร</th>
@@ -87,6 +78,7 @@ onMounted(() => {
                 </tr>
               </tbody>
             </VTable>
+            </div>
             <div
               v-else
               class="text-center py-8"

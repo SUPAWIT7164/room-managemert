@@ -96,11 +96,6 @@ const verticalNavAttrs = computed(() => {
           <slot />
         </div>
       </main>
-      <footer class="layout-footer">
-        <div class="footer-content-container">
-          <slot name="footer" />
-        </div>
-      </footer>
     </div>
     <div
       class="layout-overlay"
@@ -162,11 +157,6 @@ const verticalNavAttrs = computed(() => {
 
   &.layout-navbar-hidden .layout-navbar {
     @extend %layout-navbar-hidden;
-  }
-
-  // 👉 Footer
-  .layout-footer {
-    @include mixins.boxed-content;
   }
 
   // 👉 Layout overlay

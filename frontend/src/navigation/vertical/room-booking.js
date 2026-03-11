@@ -13,17 +13,20 @@ export default [
         to: 'face-register',
       },
       {
-        title: 'ตารางการใช้งาน',
-        to: 'bookings-calendar',
+        title: 'ตารางจองห้อง',
+        to: 'bookings-avaliable',
       },
+      // หน้า calendar ปิดใช้ — ใช้ตารางห้องว่างแทน
+      // { title: 'ตารางการใช้งาน', to: 'bookings-calendar' },
       {
         title: 'รายการการจอง',
         to: 'bookings-list',
       },
-      {
-        title: 'คำขอลงทะเบียน',
-        to: 'pending-approvals',
-      },
+      // Hidden: pending-approvals
+      // {
+      //   title: 'คำขอลงทะเบียน',
+      //   to: 'pending-approvals',
+      // },
       {
         title: 'รายงาน',
         children: [
@@ -60,18 +63,20 @@ export default [
         title: 'ระบบควบคุมห้อง',
         to: 'rooms-control',
       },
-      {
-        title: 'ไฟ',
-        to: 'rooms-lighting',
-      },
-      {
-        title: 'แอร์',
-        to: 'rooms-air-conditioning',
-      },
-      {
-        title: 'CCTV',
-        to: 'cctv',
-      },
+      // Hidden: rooms-lighting
+      // {
+      //   title: 'ไฟ',
+      //   to: 'rooms-lighting',
+      // },
+      // Hidden: rooms-air-conditioning
+      // {
+      //   title: 'แอร์',
+      //   to: 'rooms-air-conditioning',
+      // },
+      // {
+      //   title: 'CCTV',
+      //   to: 'cctv',
+      // },
     ],
   },
   {

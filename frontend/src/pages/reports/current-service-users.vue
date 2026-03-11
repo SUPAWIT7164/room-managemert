@@ -51,9 +51,9 @@ const getImageUrl = (item) => {
     }
     // If it's a relative URL (processed-images or other paths)
     if (item.image.startsWith('/processed-images/') || (item.image.startsWith('/') && !item.image.startsWith('/api'))) {
-      // Prepend backend base URL (without /api)
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
-      const backendBaseUrl = apiBaseUrl.replace('/api', '')
+      // ใช้ relative URL ตรงๆ — Vite proxy (dev) / IIS (prod) จะ serve ได้
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
+      const backendBaseUrl = apiBaseUrl.replace(/\/api\/?$/, '') || ''
       const fullUrl = `${backendBaseUrl}${item.image}`
       console.log(`[getImageUrl] Processed image URL: ${fullUrl}`)
       return fullUrl
@@ -64,8 +64,8 @@ const getImageUrl = (item) => {
     }
     // If it's a URL path starting with /api
     if (item.image.startsWith('/api')) {
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
-      const backendBaseUrl = apiBaseUrl.replace('/api', '')
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
+      const backendBaseUrl = apiBaseUrl.replace(/\/api\/?$/, '') || ''
       return `${backendBaseUrl}${item.image}`
     }
     // Return as is
@@ -77,9 +77,7 @@ const getImageUrl = (item) => {
   if (item.camera_id) {
     // Return CCTV snapshot URL with timestamp to prevent caching
     const timestamp = new Date().getTime()
-    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
-    const backendBaseUrl = apiBaseUrl.replace('/api', '')
-    return `${backendBaseUrl}/api/cctv/snapshot?cameraId=${item.camera_id}&t=${timestamp}`
+    return `/api/cctv/snapshot?cameraId=${item.camera_id}&t=${timestamp}`
   }
   
   // Fallback to default image
@@ -169,14 +167,15 @@ onMounted(() => {
   loadServiceUsers()
   
   // Connect to Server-Sent Events for real-time updates
-  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
   const authStore = useAuthStore()
   const token = authStore.token || localStorage.getItem('token') || sessionStorage.getItem('token')
   
   // Create EventSource connection (token in query parameter for EventSource compatibility)
+  const sseBase = apiBaseUrl.startsWith('/') ? '' : apiBaseUrl.replace(/\/api\/?$/, '')
   const eventSourceUrl = token 
-    ? `${apiBaseUrl.replace('/api', '')}/api/service-users/updates?token=${encodeURIComponent(token)}`
-    : `${apiBaseUrl.replace('/api', '')}/api/service-users/updates`
+    ? `${sseBase}/api/service-users/updates?token=${encodeURIComponent(token)}`
+    : `${sseBase}/api/service-users/updates`
   
   eventSource = new EventSource(eventSourceUrl)
   
@@ -271,6 +270,7 @@ onBeforeUnmount(() => {
 
     <!-- Data Table -->
     <VCard>
+      <div class="table-responsive">
       <VTable>
         <thead>
           <tr>
@@ -388,6 +388,7 @@ onBeforeUnmount(() => {
           </template>
         </tbody>
       </VTable>
+      </div>
 
       <!-- Pagination -->
       <VCardActions
@@ -452,6 +453,12 @@ onBeforeUnmount(() => {
   filter: grayscale(100%);
   /* Optional: enhance contrast */
   contrast: 1.1;
+}
+
+.table-responsive {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
 }
 </style>
 

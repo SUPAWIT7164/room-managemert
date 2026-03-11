@@ -103,8 +103,8 @@ const handleNotificationClick = notification => {
   if (!notification.isSeen)
     markRead([notification.id])
   
-  // Navigate to bookings page or pending approvals
-  router.push('/pending-approvals')
+  // Navigate to bookings list (pending-approvals is hidden)
+  router.push('/bookings/list')
 }
 </script>
 

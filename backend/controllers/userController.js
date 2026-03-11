@@ -386,10 +386,12 @@ class UserController {
                 data: users
             });
         } catch (error) {
+            console.error('Search users error:', error);
+            console.error('Error stack:', error.stack);
             res.status(500).json({
                 success: false,
                 message: 'เกิดข้อผิดพลาด',
-                error: error.message
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }
     }

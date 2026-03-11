@@ -566,7 +566,7 @@ onMounted(() => {
 }
 
 .rooms-container {
-  max-height: calc(100vh - 300px);
+  /* Removed fixed max-height to allow content to define height */
   overflow-y: auto;
 }
 </style>

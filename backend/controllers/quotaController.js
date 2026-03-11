@@ -1,4 +1,4 @@
-const { pool } = require('../config/database');
+const { pool, DB_TYPE } = require('../config/database');
 const { createLaravelSettingsTable } = require('../config/createLaravelSettingsTable');
 
 class QuotaController {
@@ -6,6 +6,7 @@ class QuotaController {
     async getAll(req, res) {
         try {
             // First check if the table has the Laravel structure (slug, module_id)
+            // MySQL: TABLE_SCHEMA = DATABASE(); SQL Server: TABLE_CATALOG = DB_NAME() (converted in database.js)
             const [columns] = await pool.query(`
                 SELECT COLUMN_NAME 
                 FROM INFORMATION_SCHEMA.COLUMNS 
@@ -17,7 +18,10 @@ class QuotaController {
             const hasLaravelStructure = columns.length === 2;
 
             if (!hasLaravelStructure) {
-                // Create Laravel structure table
+                // On MSSQL we don't create the Laravel-style settings table; return empty data
+                if (DB_TYPE === 'mssql') {
+                    return res.json({ success: true, data: [] });
+                }
                 try {
                     await createLaravelSettingsTable();
                 } catch (error) {
@@ -43,8 +47,10 @@ class QuotaController {
                 data: rows
             });
         } catch (error) {
-            // If table doesn't exist, return empty array
-            if (error.code === 'ER_NO_SUCH_TABLE') {
+            // If table doesn't exist, return empty array (MySQL: ER_NO_SUCH_TABLE; MSSQL: various)
+            const noTable = error.code === 'ER_NO_SUCH_TABLE' ||
+                (error.message && /Invalid object name 'settings'|does not exist/i.test(error.message));
+            if (noTable) {
                 return res.json({
                     success: true,
                     data: []

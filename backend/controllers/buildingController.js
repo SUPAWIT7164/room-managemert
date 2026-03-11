@@ -1,15 +1,18 @@
 const Building = require('../models/Building');
 
 class BuildingController {
-    // Get all buildings
+    // Get all buildings (optionally with floors from areas and room count from rooms)
     async getAll(req, res) {
         try {
-            const { search, disable } = req.query;
-            
-            const buildings = await Building.findAll({
+            const { search, disable, withFloors } = req.query;
+            const opts = {
                 search,
                 disable: disable !== undefined ? parseInt(disable) : 0
-            });
+            };
+
+            const buildings = (withFloors === '1' || withFloors === 'true')
+                ? await Building.findAllWithFloorsAndRoomCount(opts)
+                : await Building.findAll(opts);
 
             res.json({
                 success: true,
@@ -77,7 +80,8 @@ class BuildingController {
     // Create building
     async create(req, res) {
         try {
-            const { name, name_en, description, address } = req.body;
+            const body = req.body || {};
+            const name = body.name != null ? String(body.name).trim() : '';
 
             if (!name) {
                 return res.status(400).json({
@@ -88,9 +92,7 @@ class BuildingController {
 
             const building = await Building.create({
                 name,
-                name_en,
-                description,
-                address
+                code: body.code != null ? String(body.code).trim() : undefined
             });
 
             res.status(201).json({
@@ -99,6 +101,7 @@ class BuildingController {
                 data: building
             });
         } catch (error) {
+            console.error('Building create error:', error.message, error.stack);
             res.status(500).json({
                 success: false,
                 message: 'เกิดข้อผิดพลาด',
@@ -127,6 +130,41 @@ class BuildingController {
                 data: updatedBuilding
             });
         } catch (error) {
+            res.status(500).json({
+                success: false,
+                message: 'เกิดข้อผิดพลาด',
+                error: error.message
+            });
+        }
+    }
+
+    // Upload building image
+    async uploadImage(req, res) {
+        try {
+            const buildingId = req.params.id;
+
+            if (!req.file) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'กรุณาอัปโหลดไฟล์รูปภาพ'
+                });
+            }
+
+            const imagePath = `/uploads/buildings/${req.file.filename}`;
+            const building = await Building.update(buildingId, { image: imagePath });
+
+            const baseUrl = req.protocol + '://' + req.get('host');
+            res.json({
+                success: true,
+                message: 'อัปโหลดรูปอาคารสำเร็จ',
+                data: {
+                    image_url: imagePath,
+                    image_full_url: baseUrl + imagePath,
+                    building
+                }
+            });
+        } catch (error) {
+            console.error('Upload building image error:', error);
             res.status(500).json({
                 success: false,
                 message: 'เกิดข้อผิดพลาด',

@@ -11,12 +11,27 @@ class BookingController {
             if (start) options.start_date = start;
             if (end) options.end_date = end;
             
+            // Filter by status - new structure: status BIT (1 = approved, 0/NULL = pending)
+            // Don't set options.status - let Booking.findAll() handle default filtering
+            // It will exclude cancelled and rejected bookings by default
+            
             let bookings = await Booking.findAll(options);
+            
+            // Additional filter: exclude cancelled and rejected bookings
+            // status BIT: 1 = approved, 0/NULL = pending
+            bookings = bookings.filter(b => {
+                const isCancelled = b.cancel === 1 || b.cancel === true;
+                const isRejected = b.reject === 1 || b.reject === true;
+                return !isCancelled && !isRejected;
+            });
             
             // Filter by room_ids if provided
             if (room_ids) {
                 const roomIdArray = Array.isArray(room_ids) ? room_ids : room_ids.split(',');
-                bookings = bookings.filter(b => roomIdArray.includes(String(b.room_id)));
+                bookings = bookings.filter(b => {
+                    const roomId = b.room || b.room_id;
+                    return roomIdArray.includes(String(roomId));
+                });
             }
             
             res.json({
@@ -25,10 +40,11 @@ class BookingController {
             });
         } catch (error) {
             console.error('Get calendar data error:', error);
+            console.error('Error stack:', error.stack);
             res.status(500).json({
                 success: false,
                 message: 'เกิดข้อผิดพลาดในการดึงข้อมูลปฏิทิน',
-                error: error.message
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }
     }
@@ -160,7 +176,15 @@ class BookingController {
             const countOptions = { ...options };
             delete countOptions.limit;
             delete countOptions.offset;
-            const total = await Booking.count(countOptions);
+            
+            let total;
+            try {
+                total = await Booking.count(countOptions);
+            } catch (countError) {
+                console.error('[BookingController] Error in Booking.count:', countError);
+                console.error('[BookingController] Count error stack:', countError.stack);
+                throw countError;
+            }
             
             // Apply limit and offset for data fetching
             // Create a new options object to ensure limit and offset are set correctly
@@ -197,10 +221,11 @@ class BookingController {
             });
         } catch (error) {
             console.error('Get all bookings error:', error);
+            console.error('Error stack:', error.stack);
             res.status(500).json({
                 success: false,
                 message: 'เกิดข้อผิดพลาดในการดึงข้อมูลการจอง',
-                error: error.message
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }
     }
@@ -257,7 +282,7 @@ class BookingController {
             console.log('Request body:', JSON.stringify(req.body, null, 2));
             console.log('User:', req.user ? { id: req.user.id, role: req.user.role } : 'No user');
             
-            const { room_id, title, name, description, start_datetime, end_datetime, attendees, participants, attendeesEmails } = req.body;
+            const { room_id, room, title, name, description, start_datetime, end_datetime, start, end, attendees, attendeesEmails } = req.body;
             
             // Validate user is authenticated
             if (!req.user || !req.user.id) {
@@ -270,17 +295,20 @@ class BookingController {
             const userId = req.user.id;
             
             // Use title or name (frontend might send either)
-            const bookingTitle = title || name || 'การจอง';
+            const bookingName = name || title || 'การจอง';
             
             // Validate required fields
-            if (!room_id) {
+            const roomId = room_id || room;
+            if (!roomId) {
                 return res.status(400).json({
                     success: false,
                     message: 'กรุณาเลือกห้อง'
                 });
             }
             
-            if (!start_datetime || !end_datetime) {
+            const startTime = start_datetime || start;
+            const endTime = end_datetime || end;
+            if (!startTime || !endTime) {
                 return res.status(400).json({
                     success: false,
                     message: 'กรุณากรอกเวลาเริ่มต้นและสิ้นสุด'
@@ -288,8 +316,8 @@ class BookingController {
             }
             
             // Validate datetime format
-            const startDate = new Date(start_datetime);
-            const endDate = new Date(end_datetime);
+            const startDate = new Date(startTime);
+            const endDate = new Date(endTime);
             
             if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
                 return res.status(400).json({
@@ -307,10 +335,10 @@ class BookingController {
             
             // Check if room exists
             const Room = require('../models/Room');
-            let room;
+            let roomData;
             try {
-                room = await Room.findById(room_id);
-                if (!room) {
+                roomData = await Room.findById(roomId);
+                if (!roomData) {
                     return res.status(404).json({
                         success: false,
                         message: 'ไม่พบห้องที่ระบุ'
@@ -327,7 +355,7 @@ class BookingController {
             // Check for overlap
             let hasOverlap = false;
             try {
-                hasOverlap = await Booking.checkOverlap(room_id, start_datetime, end_datetime);
+                hasOverlap = await Booking.checkOverlap(roomId, startTime, endTime);
                 if (hasOverlap) {
                     return res.status(400).json({
                         success: false,
@@ -344,28 +372,34 @@ class BookingController {
             
             // Determine status
             const isSuperAdmin = req.user.role === 'super-admin';
-            const status = (room && room.auto_approve) || isSuperAdmin ? 'approved' : 'pending';
+            const status = (roomData && roomData.auto_approve) || isSuperAdmin ? 1 : null;
             
-            // Convert attendeesEmails to participants format if provided
-            let participantsData = participants;
-            if (attendeesEmails && Array.isArray(attendeesEmails) && attendeesEmails.length > 0) {
-                participantsData = attendeesEmails.map(email => ({ email: email }));
-            }
-            
-            // Prepare booking data
+            // Prepare booking data (use new column names)
             const bookingData = {
-                room_id: parseInt(room_id),
-                booker_id: userId,
-                title: bookingTitle,
+                room: parseInt(roomId),
+                room_id: parseInt(roomId),  // For compatibility
+                booker: userId,
+                booker_id: userId,  // For compatibility
+                name: bookingName,
+                title: bookingName,  // For compatibility
                 description: description || null,
-                start_time: start_datetime,
-                end_time: end_datetime,
+                start: startTime,
+                start_time: startTime,  // For compatibility
+                start_datetime: startTime,  // For compatibility
+                end: endTime,
+                end_time: endTime,  // For compatibility
+                end_datetime: endTime,  // For compatibility
                 attendees: parseInt(attendees) || 0,
-                participants: participantsData || null,
                 status: status
             };
             
-            console.log('Booking data to create:', JSON.stringify(bookingData, null, 2));
+            console.log('[BookingController.create] Booking data to create:', JSON.stringify(bookingData, null, 2));
+            console.log('[BookingController.create] Datetime values:', {
+                start: startTime,
+                end: endTime,
+                start_type: typeof startTime,
+                end_type: typeof endTime
+            });
             
             // Create booking
             let booking;
@@ -444,28 +478,34 @@ class BookingController {
             
             // Check ownership (unless user is admin)
             const isAdmin = ['super-admin', 'admin', 'Admin'].includes(req.user.role);
-            if (existingBooking.user_id !== userId && !isAdmin) {
+            const bookerId = existingBooking.booker || existingBooking.booker_id || existingBooking.user_id;
+            if (bookerId !== userId && !isAdmin) {
                 return res.status(403).json({
                     success: false,
                     message: 'คุณไม่มีสิทธิ์แก้ไขการจองนี้'
                 });
             }
             
-            // Check if booking can be updated (not approved/rejected/cancelled)
-            if (existingBooking.status === 'approved' || existingBooking.status === 'rejected' || existingBooking.status === 'cancelled') {
+            // อนุญาตให้แก้ไขเฉพาะการจองที่ยังไม่ถูกปฏิเสธหรือยกเลิก (อนุมัติแล้วแก้ไขได้)
+            const isCancelled = existingBooking.cancel === 1 || existingBooking.status === 'cancelled';
+            const isRejected = existingBooking.reject === 1 || existingBooking.status === 'rejected';
+            if (isCancelled || isRejected) {
                 return res.status(400).json({
                     success: false,
-                    message: 'ไม่สามารถแก้ไขการจองที่อนุมัติ/ปฏิเสธ/ยกเลิกแล้ว'
+                    message: 'ไม่สามารถแก้ไขการจองที่ปฏิเสธหรือยกเลิกแล้ว'
                 });
             }
             
-            const { title, description, start_datetime, end_datetime, attendees, participants } = req.body;
+            const { title, name, description, start_datetime, end_datetime, start_time, end_time, start, end, attendees } = req.body;
+            const startDateTime = start_datetime || start_time || start;
+            const endDateTime = end_datetime || end_time || end;
             
             // Check for overlap if time changed
-            if (start_datetime || end_datetime) {
-                const startTime = start_datetime || existingBooking.start_datetime;
-                const endTime = end_datetime || existingBooking.end_datetime;
-                const hasOverlap = await Booking.checkOverlap(existingBooking.room_id, startTime, endTime, id);
+            if (startDateTime || endDateTime) {
+                const startTime = startDateTime || existingBooking.start || existingBooking.start_datetime;
+                const endTime = endDateTime || existingBooking.end || existingBooking.end_datetime;
+                const roomId = existingBooking.room || existingBooking.room_id;
+                const hasOverlap = await Booking.checkOverlap(roomId, startTime, endTime, id);
                 if (hasOverlap) {
                     return res.status(400).json({
                         success: false,
@@ -475,12 +515,11 @@ class BookingController {
             }
             
             const updateData = {};
-            if (title) updateData.title = title;
+            if (title || name) updateData.name = name || title;
             if (description !== undefined) updateData.description = description;
-            if (start_datetime) updateData.start_time = start_datetime;
-            if (end_datetime) updateData.end_time = end_datetime;
+            if (startDateTime) updateData.start = startDateTime;
+            if (endDateTime) updateData.end = endDateTime;
             if (attendees !== undefined) updateData.attendees = attendees;
-            if (participants !== undefined) updateData.participants = participants;
             
             const booking = await Booking.update(id, updateData);
             
@@ -515,7 +554,8 @@ class BookingController {
             
             // Check ownership (unless user is admin)
             const isAdmin = ['super-admin', 'admin', 'Admin'].includes(req.user.role);
-            if (booking.user_id !== userId && !isAdmin) {
+            const bookerId = booking.booker || booking.booker_id || booking.user_id;
+            if (bookerId !== userId && !isAdmin) {
                 return res.status(403).json({
                     success: false,
                     message: 'คุณไม่มีสิทธิ์ยกเลิกการจองนี้'
@@ -523,14 +563,16 @@ class BookingController {
             }
             
             // Check if booking can be cancelled
-            if (booking.status === 'cancelled') {
+            const isCancelled = booking.cancel === 1 || booking.status === 'cancelled';
+            const isRejected = booking.reject === 1 || booking.status === 'rejected';
+            if (isCancelled) {
                 return res.status(400).json({
                     success: false,
                     message: 'การจองนี้ถูกยกเลิกแล้ว'
                 });
             }
             
-            if (booking.status === 'rejected') {
+            if (isRejected) {
                 return res.status(400).json({
                     success: false,
                     message: 'ไม่สามารถยกเลิกการจองที่ถูกปฏิเสธแล้ว'
@@ -567,8 +609,19 @@ class BookingController {
                 });
             }
             
+            console.log('[BookingController.approve] Booking data:', {
+                id: booking.id,
+                status: booking.status,
+                statusType: typeof booking.status,
+                cancel: booking.cancel,
+                reject: booking.reject,
+                room: booking.room,
+                room_id: booking.room_id
+            })
+            
             // Check if user can approve this room
-            const canApprove = await Approver.isApprover(approverId, booking.room_id);
+            const roomId = booking.room || booking.room_id;
+            const canApprove = await Approver.isApprover(approverId, roomId);
             const isAdmin = ['super-admin', 'admin', 'Admin'].includes(req.user.role);
             if (!canApprove && !isAdmin) {
                 return res.status(403).json({
@@ -578,10 +631,54 @@ class BookingController {
             }
             
             // Check if booking can be approved
-            if (booking.status !== 'pending') {
+            // Pending = status is null, 0, 'pending', '0', undefined, false, or not approved (status !== 1)
+            const bookingStatus = booking.status
+            const isPending = (
+                bookingStatus === null || 
+                bookingStatus === undefined || 
+                bookingStatus === 0 || 
+                bookingStatus === 'pending' || 
+                bookingStatus === '0' ||
+                bookingStatus === false ||
+                (typeof bookingStatus === 'string' && bookingStatus.toLowerCase() === 'pending')
+            )
+            const isApproved = bookingStatus === 1 || bookingStatus === 'approved' || bookingStatus === 'confirmed' || bookingStatus === true
+            const isCancelled = booking.cancel === 1 || booking.cancel === true
+            const isRejected = booking.reject === 1 || booking.reject === true
+            
+            console.log('[BookingController.approve] Status check:', {
+                bookingId: id,
+                status: bookingStatus,
+                statusType: typeof bookingStatus,
+                isPending,
+                isApproved,
+                isCancelled,
+                isRejected,
+                canApprove,
+                isAdmin,
+                userRole: req.user.role
+            })
+            
+            if (isCancelled || isRejected) {
                 return res.status(400).json({
                     success: false,
-                    message: 'การจองนี้ไม่สามารถอนุมัติได้'
+                    message: 'ไม่สามารถอนุมัติการจองที่ถูกยกเลิกหรือปฏิเสธแล้ว'
+                });
+            }
+            
+            if (isApproved) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'การจองนี้ได้รับการอนุมัติแล้ว'
+                });
+            }
+            
+            // For super-admin and admin, allow approving even if status is not explicitly pending
+            // Just check that it's not approved, cancelled, or rejected
+            if (!isPending && !isAdmin) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'การจองนี้ไม่สามารถอนุมัติได้ (สถานะไม่ถูกต้อง)'
                 });
             }
             
@@ -617,7 +714,8 @@ class BookingController {
             }
             
             // Check if user can approve this room
-            const canApprove = await Approver.isApprover(approverId, booking.room_id);
+            const roomId = booking.room || booking.room_id;
+            const canApprove = await Approver.isApprover(approverId, roomId);
             const isAdmin = ['super-admin', 'admin', 'Admin'].includes(req.user.role);
             if (!canApprove && !isAdmin) {
                 return res.status(403).json({
@@ -627,10 +725,49 @@ class BookingController {
             }
             
             // Check if booking can be rejected
-            if (booking.status !== 'pending') {
+            // Pending = status is null, 0, 'pending', '0', undefined, false, or not approved (status !== 1)
+            const bookingStatus = booking.status
+            const isPending = (
+                bookingStatus === null || 
+                bookingStatus === undefined || 
+                bookingStatus === 0 || 
+                bookingStatus === 'pending' || 
+                bookingStatus === '0' ||
+                bookingStatus === false ||
+                (typeof bookingStatus === 'string' && bookingStatus.toLowerCase() === 'pending')
+            )
+            const isApproved = bookingStatus === 1 || bookingStatus === 'approved' || bookingStatus === 'confirmed' || bookingStatus === true
+            const isCancelled = booking.cancel === 1 || booking.cancel === true
+            const isRejected = booking.reject === 1 || booking.reject === true
+            
+            console.log('[BookingController.reject] Status check:', {
+                bookingId: id,
+                status: bookingStatus,
+                statusType: typeof bookingStatus,
+                isPending,
+                isApproved,
+                isCancelled,
+                isRejected
+            })
+            
+            if (isCancelled || isRejected) {
                 return res.status(400).json({
                     success: false,
-                    message: 'การจองนี้ไม่สามารถปฏิเสธได้'
+                    message: 'ไม่สามารถปฏิเสธการจองที่ถูกยกเลิกหรือปฏิเสธแล้ว'
+                });
+            }
+            
+            if (isApproved) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ไม่สามารถปฏิเสธการจองที่ได้รับการอนุมัติแล้ว'
+                });
+            }
+            
+            if (!isPending) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'การจองนี้ไม่สามารถปฏิเสธได้ (สถานะไม่ถูกต้อง)'
                 });
             }
             

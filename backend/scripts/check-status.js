@@ -15,7 +15,7 @@ async function checkServerStatus() {
         if (healthResponse.data.database === 'disconnected') {
             console.log('\n⚠️  ข้อความเตือน: ฐานข้อมูลไม่สามารถเชื่อมต่อได้');
             console.log('   กรุณาตรวจสอบ:');
-            console.log('   1. MySQL/MariaDB service กำลังทำงานอยู่หรือไม่');
+            console.log('   1. SQL Server service กำลังทำงานอยู่หรือไม่');
             console.log('   2. การตั้งค่าในไฟล์ .env ถูกต้องหรือไม่');
             console.log('   3. Database server สามารถเข้าถึงได้หรือไม่\n');
         }

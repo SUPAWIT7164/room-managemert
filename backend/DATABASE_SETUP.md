@@ -1,6 +1,6 @@
 # Database Setup Guide
 
-โปรเจคนี้รองรับการเชื่อมต่อกับทั้ง MySQL และ SQL Server (SSMS)
+โปรเจคนี้ใช้ **SQL Server เท่านั้น**
 
 ## การตั้งค่า
 
@@ -19,28 +19,12 @@ npm install
 cp .env.example .env
 ```
 
-### 3. การตั้งค่าสำหรับ MySQL (ค่าเริ่มต้น)
+### 3. การตั้งค่าสำหรับ SQL Server
 
 แก้ไขไฟล์ `.env`:
 
 ```env
-DB_TYPE=mysql
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=your_mysql_password
-DB_NAME=smart_room_booking
-```
-
-### 4. การตั้งค่าสำหรับ SQL Server
-
-แก้ไขไฟล์ `.env`:
-
-```env
-DB_TYPE=mssql
-# หรือ
-# DB_TYPE=sqlserver
-
+DB_CONNECTION=sqlsrv
 DB_HOST=localhost
 DB_PORT=1433
 DB_USER=sa
@@ -50,95 +34,65 @@ DB_ENCRYPT=false
 DB_TRUST_CERT=true
 ```
 
-#### หมายเหตุสำหรับ SQL Server:
+**หมายเหตุ:**
+- `DB_CONNECTION=sqlsrv` ระบุว่าใช้ SQL Server
+- `DB_ENCRYPT=false` ปิดการเข้ารหัส (สำหรับ local development)
+- `DB_TRUST_CERT=true` ไว้ใจ self-signed certificates
 
-- **DB_HOST**: ชื่อเซิร์ฟเวอร์ SQL Server หรือ IP address
-- **DB_PORT**: พอร์ตของ SQL Server (ค่าเริ่มต้นคือ 1433)
-- **DB_USER**: ชื่อผู้ใช้ SQL Server (เช่น sa หรือ username ที่มีสิทธิ์)
-- **DB_PASSWORD**: รหัสผ่าน SQL Server
-- **DB_NAME**: ชื่อฐานข้อมูล
-- **DB_ENCRYPT**: ตั้งค่าเป็น `true` สำหรับ Azure SQL Database, `false` สำหรับ SQL Server ทั่วไป
-- **DB_TRUST_CERT**: ตั้งค่าเป็น `true` เพื่อยอมรับ self-signed certificates
+### 4. ตรวจสอบการเชื่อมต่อ
 
-### 5. สร้างฐานข้อมูล
-
-#### สำหรับ MySQL:
-```sql
-CREATE DATABASE smart_room_booking;
-```
-
-#### สำหรับ SQL Server:
-```sql
-CREATE DATABASE smart_room_booking;
-```
-
-### 6. ทดสอบการเชื่อมต่อ
-
-รันเซิร์ฟเวอร์:
+รัน backend server:
 
 ```bash
 npm run dev
 ```
 
-หรือ
+ตรวจสอบ console logs:
+- `✅ SQL Server connection pool created` - เชื่อมต่อสำเร็จ
+- `✅ SQL Server connected successfully` - ทดสอบ connection สำเร็จ
 
-```bash
-npm start
-```
+## SQL Server Syntax
 
-ตรวจสอบการเชื่อมต่อที่: `http://localhost:5000/api/health`
+โปรเจคนี้ใช้ SQL Server syntax โดยตรง:
 
-## ความแตกต่างระหว่าง MySQL และ SQL Server
+- **Date Functions**: `GETDATE()` แทน `NOW()`
+- **Date Casting**: `CAST(column AS DATE)` แทน `DATE(column)`
+- **LIMIT/OFFSET**: `OFFSET x ROWS FETCH NEXT y ROWS ONLY` แทน `LIMIT y OFFSET x`
+- **String Functions**: `FORMAT(datetime, 'yyyy-MM-dd HH:mm:ss')` สำหรับ datetime formatting
 
-โปรเจคนี้ใช้ abstraction layer เพื่อรองรับทั้งสองฐานข้อมูล แต่มีข้อควรระวังบางประการ:
+## Timezone Handling
 
-### SQL Syntax
+โปรเจคนี้จัดการ timezone สำหรับ SQL Server:
 
-- **Backticks vs Brackets**: MySQL ใช้ backticks (`` ` ``) สำหรับ identifiers, SQL Server ใช้ brackets (`[]`)
-- **LIMIT**: MySQL ใช้ `LIMIT`, SQL Server ใช้ `TOP` หรือ `OFFSET...FETCH`
-- **String Concatenation**: MySQL ใช้ `CONCAT()`, SQL Server ใช้ `+` หรือ `CONCAT()`
+1. **INSERT**: ลบ 7 ชั่วโมงก่อน INSERT เพื่อ compensate SQL Server UTC conversion
+2. **SELECT**: บวก 7 ชั่วโมงกลับเมื่อ query เพื่อแสดงเวลาที่ถูกต้อง
+3. **FORMAT()**: ใช้ `FORMAT()` ใน SELECT เพื่อป้องกัน driver-level timezone conversion
 
-### Auto-increment
+ดูรายละเอียดเพิ่มเติมใน `DATETIME_TIMEZONE_COMPARISON.md`
 
-- MySQL: `AUTO_INCREMENT`
-- SQL Server: `IDENTITY(1,1)`
+## Troubleshooting
 
-### Date Functions
+### Connection Issues
 
-- MySQL: `NOW()`, `DATE()`, `DATE_FORMAT()`
-- SQL Server: `GETDATE()`, `CAST()`, `FORMAT()`
+1. **ตรวจสอบว่า SQL Server service กำลังทำงานอยู่**
+   - Windows: Services → SQL Server (MSSQLSERVER)
+   - หรือใช้ SQL Server Configuration Manager
 
-## การแก้ไขปัญหา
+2. **ตรวจสอบ DB_HOST และ DB_PORT**
+   - Default port: 1433
+   - สำหรับ Azure SQL: ใช้ server name จาก Azure portal
 
-### SQL Server Connection Issues
+3. **ตรวจสอบ Authentication**
+   - SQL Server Authentication: ใช้ `sa` user และ password
+   - Windows Authentication: ต้องตั้งค่า connection string ต่างกัน
 
-1. **ตรวจสอบว่า SQL Server กำลังทำงานอยู่**
-   - เปิด SQL Server Configuration Manager
-   - ตรวจสอบว่า SQL Server service กำลังทำงาน
+4. **ตรวจสอบ Firewall**
+   - เปิด port 1433 ใน Windows Firewall
+   - สำหรับ Azure SQL: เปิด firewall rules ใน Azure portal
 
-2. **ตรวจสอบ TCP/IP Protocol**
-   - เปิด SQL Server Configuration Manager
-   - ไปที่ SQL Server Network Configuration > Protocols for [Instance Name]
-   - เปิดใช้งาน TCP/IP
-   - ตั้งค่า TCP Port เป็น 1433 (หรือพอร์ตที่คุณใช้)
+### Common Errors
 
-3. **ตรวจสอบ Firewall**
-   - อนุญาตพอร์ต 1433 (หรือพอร์ตที่คุณใช้) ผ่าน Windows Firewall
-
-4. **ตรวจสอบ Authentication**
-   - ตรวจสอบว่าใช้ SQL Server Authentication หรือ Windows Authentication
-   - สำหรับ SQL Server Authentication ต้องตั้งค่า `DB_USER` และ `DB_PASSWORD`
-
-### MySQL Connection Issues
-
-1. **ตรวจสอบว่า MySQL service กำลังทำงานอยู่**
-2. **ตรวจสอบ username และ password**
-3. **ตรวจสอบว่า database ถูกสร้างแล้ว**
-
-## หมายเหตุ
-
-- โค้ดที่มีอยู่จะทำงานกับทั้ง MySQL และ SQL Server ผ่าน abstraction layer
-- หากคุณต้องการใช้ SQL syntax เฉพาะของฐานข้อมูลใดฐานข้อมูลหนึ่ง คุณอาจต้องแก้ไขโค้ดใน models และ controllers
-- สำหรับ production environment แนะนำให้ใช้ connection pooling และตั้งค่า timeout ที่เหมาะสม
-
-
+- **ETIMEDOUT**: SQL Server service ไม่ทำงาน หรือ network issue
+- **ECONNREFUSED**: DB_HOST หรือ DB_PORT ไม่ถูกต้อง
+- **Login failed**: DB_USER หรือ DB_PASSWORD ไม่ถูกต้อง
+- **Cannot open database**: DB_NAME ไม่มีใน SQL Server

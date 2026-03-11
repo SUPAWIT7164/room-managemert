@@ -41,12 +41,14 @@ const checkFace = async () => {
   }
 }
 
-// Load existing face image
+// Load existing face image (ดึงภาพที่ลงทะเบียนแล้วมาแสดง — ถ้าเข้าเว็บครั้งแรกจะไม่มีภาพ)
 const loadFaceImage = async () => {
   try {
     const response = await api.get('/face')
     if (response.data.success && response.data.data?.image) {
-      faceImage.value = response.data.data.image
+      const img = response.data.data.image
+      faceImage.value = img
+      capturedImage.value = img
     }
   } catch (error) {
     console.error('Error loading face image:', error)
@@ -110,7 +112,7 @@ const registerFace = async () => {
       
       // Redirect after 2 seconds
       setTimeout(() => {
-        router.push('/dashboard')
+        router.push('/bookings/avaliable')
       }, 2000)
     }
   } catch (err) {

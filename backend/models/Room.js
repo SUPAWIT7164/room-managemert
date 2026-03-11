@@ -191,14 +191,87 @@ class Room {
 
     static async getAvailability(roomId, date) {
         const [bookings] = await pool.query(`
-            SELECT id, title, start_datetime as start_time, end_datetime as end_time, status
-            FROM booking_requests
-            WHERE room_id = ? 
-              AND DATE(start_datetime) = ?
-              AND status NOT IN ('rejected', 'cancelled')
-            ORDER BY start_datetime
+            SELECT br.id, br.name as title, 
+                   FORMAT(br.[start], 'yyyy-MM-dd HH:mm:ss') as start_datetime,
+                   FORMAT(br.[end], 'yyyy-MM-dd HH:mm:ss') as end_datetime,
+                   br.status, br.cancel, br.reject
+            FROM booking_requests br
+            WHERE br.[room] = ? 
+              AND CAST(br.[start] AS DATE) = CAST(? AS DATE)
+              AND (br.[cancel] IS NULL OR br.[cancel] = 0)
+              AND (br.[reject] IS NULL OR br.[reject] = 0)
+            ORDER BY br.[start]
         `, [roomId, date]);
-        return bookings;
+        return bookings.map(b => ({
+            ...b,
+            start: b.start_datetime, // Use string format for Date parsing
+            end: b.end_datetime, // Use string format for Date parsing
+            start_time: b.start_datetime,
+            end_time: b.end_datetime
+        }));
+    }
+
+    /**
+     * โหลดตำแหน่งอุปกรณ์จากตาราง rooms (x1,y1,x2,y2 หรือ device_positions JSON)
+     * คืนค่า { light: [{x,y}], ac: [...], erv: [...] } สำหรับหน้า /rooms/control
+     */
+    static async getDevicePositions(roomId) {
+        const [rows] = await pool.query(
+            'SELECT device_positions, x1, y1, x2, y2 FROM rooms WHERE id = ?',
+            [roomId]
+        );
+        const row = rows && rows[0];
+        if (!row) return { light: [], ac: [], erv: [] };
+        const empty = { light: [], ac: [], erv: [] };
+        if (row.device_positions) {
+            try {
+                const parsed = typeof row.device_positions === 'string' ? JSON.parse(row.device_positions) : row.device_positions;
+                if (parsed && typeof parsed === 'object') {
+                    return {
+                        light: Array.isArray(parsed.light) ? parsed.light : empty.light,
+                        ac: Array.isArray(parsed.ac) ? parsed.ac : empty.ac,
+                        erv: Array.isArray(parsed.erv) ? parsed.erv : empty.erv
+                    };
+                }
+            } catch (e) {
+                // fallback to x1,y1,x2,y2 or empty
+            }
+        }
+        const x1 = row.x1 != null ? Number(row.x1) : null;
+        const y1 = row.y1 != null ? Number(row.y1) : null;
+        const x2 = row.x2 != null ? Number(row.x2) : null;
+        const y2 = row.y2 != null ? Number(row.y2) : null;
+        if (x1 == null || y1 == null || x2 == null || y2 == null) return empty;
+        const midX = (x1 + x2) / 2;
+        const midY = (y1 + y2) / 2;
+        return {
+            light: [{ x: x1, y: y1 }, { x: midX, y: y1 }, { x: x2, y: y1 }],
+            ac: [{ x: x1, y: midY }, { x: midX, y: midY }, { x: x2, y: midY }],
+            erv: [{ x: x1, y: y2 }, { x: midX, y: y2 }, { x: x2, y: y2 }]
+        };
+    }
+
+    /**
+     * บันทึกตำแหน่งอุปกรณ์ลงตาราง rooms (device_positions JSON + x1,y1,x2,y2 เป็น bounding box)
+     */
+    static async setDevicePositions(roomId, positions) {
+        const light = Array.isArray(positions.light) ? positions.light : [];
+        const ac = Array.isArray(positions.ac) ? positions.ac : [];
+        const erv = Array.isArray(positions.erv) ? positions.erv : [];
+        const all = [...light, ...ac, ...erv].filter(p => p && (p.x != null || p.x1 != null) && (p.y != null || p.y1 != null));
+        let x1 = null, y1 = null, x2 = null, y2 = null;
+        if (all.length > 0) {
+            x1 = Math.min(...all.map(p => Number(p.x ?? p.x1)));
+            y1 = Math.min(...all.map(p => Number(p.y ?? p.y1)));
+            x2 = Math.max(...all.map(p => Number(p.x ?? p.x1)));
+            y2 = Math.max(...all.map(p => Number(p.y ?? p.y1)));
+        }
+        const devicePositionsJson = JSON.stringify({ light, ac, erv });
+        await pool.query(
+            'UPDATE rooms SET device_positions = ?, x1 = ?, y1 = ?, x2 = ?, y2 = ? WHERE id = ?',
+            [devicePositionsJson, x1, y1, x2, y2, roomId]
+        );
+        return true;
     }
 }
 

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/utils/api'
 
@@ -8,6 +8,8 @@ definePage({
     requiresAuth: true,
   },
 })
+
+const REFRESH_INTERVAL_MS = 0 // ปิด auto-refresh (เดิม 10 * 1000 = ทุก 10 วินาที)
 
 const router = useRouter()
 
@@ -18,6 +20,7 @@ const deleteDialogData = ref({ id: null, name: null })
 const snackbar = ref(false)
 const snackbarText = ref('')
 const snackbarColor = ref('success')
+let refreshTimer = null
 
 const fetchDevices = async () => {
   loading.value = true
@@ -30,6 +33,16 @@ const fetchDevices = async () => {
   } finally {
     loading.value = false
   }
+}
+
+/** รีเฟรชสถานะอุปกรณ์ใน DB (sync จาก HA) แล้วโหลดรายการใหม่ */
+const refreshDeviceStatus = async () => {
+  try {
+    await api.post('/devices/sync/all')
+  } catch (err) {
+    console.warn('Device sync (DB) failed:', err?.message || err)
+  }
+  await fetchDevices()
 }
 
 const handleEdit = async (device) => {
@@ -74,8 +87,46 @@ const showSnackbar = (color, text) => {
   snackbar.value = true
 }
 
+/** แสดงค่า X: ถ้าเก็บเป็น "x1,x2" จะแสดง "x1 , x2" (ทศนิยม 4 ตำแหน่ง) */
+const formatX = (val) => {
+  if (val == null || val === '') return '-'
+  const s = String(val).trim()
+  if (s.includes(',')) {
+    const parts = s.split(',').map(p => Number(p.trim()))
+    if (parts.length >= 2 && !Number.isNaN(parts[0]) && !Number.isNaN(parts[1])) {
+      return `${Number(parts[0]).toFixed(4)} , ${Number(parts[1]).toFixed(4)}`
+    }
+  }
+  const n = Number(s)
+  return Number.isNaN(n) ? s : Number(n).toFixed(4)
+}
+
+/** แสดงค่า Y: ถ้าเก็บเป็น "y1,y2" จะแสดง "y1 , y2" (ทศนิยม 4 ตำแหน่ง) */
+const formatY = (val) => {
+  if (val == null || val === '') return '-'
+  const s = String(val).trim()
+  if (s.includes(',')) {
+    const parts = s.split(',').map(p => Number(p.trim()))
+    if (parts.length >= 2 && !Number.isNaN(parts[0]) && !Number.isNaN(parts[1])) {
+      return `${Number(parts[0]).toFixed(4)} , ${Number(parts[1]).toFixed(4)}`
+    }
+  }
+  const n = Number(s)
+  return Number.isNaN(n) ? s : Number(n).toFixed(4)
+}
+
 onMounted(() => {
   fetchDevices()
+  if (REFRESH_INTERVAL_MS > 0) {
+    refreshTimer = setInterval(refreshDeviceStatus, REFRESH_INTERVAL_MS)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
 })
 </script>
 
@@ -84,24 +135,12 @@ onMounted(() => {
     <VRow>
       <VCol cols="12">
         <VCard>
-          <VCardTitle class="d-flex justify-space-between align-center">
-            <span>
-              <VIcon
-                icon="tabler-device-desktop"
-                class="me-2"
-              />
-              รายการอุปกรณ์
-            </span>
-            <VBtn
-              color="primary"
-              :to="{ name: 'devices-create' }"
-            >
-              <VIcon
-                icon="tabler-plus"
-                class="me-2"
-              />
-              สร้างอุปกรณ์ใหม่
-            </VBtn>
+          <VCardTitle>
+            <VIcon
+              icon="tabler-device-desktop"
+              class="me-2"
+            />
+            รายการอุปกรณ์
           </VCardTitle>
           <VCardText>
             <div v-if="loading" class="text-center py-8">
@@ -110,17 +149,20 @@ onMounted(() => {
                 color="primary"
               />
             </div>
-            <VTable
+            <div
               v-else-if="devices.length > 0"
-              class="text-no-wrap"
+              class="table-responsive"
             >
+            <VTable class="text-no-wrap">
               <thead>
                 <tr>
                   <th>รหัส</th>
                   <th>ชื่ออุปกรณ์</th>
-                  <th>รหัสอุปกรณ์</th>
+                  <th>IP Address</th>
                   <th>ประเภท</th>
                   <th>ห้อง</th>
+                  <th>X</th>
+                  <th>Y</th>
                   <th>สถานะ</th>
                   <th class="text-end">การจัดการ</th>
                 </tr>
@@ -132,15 +174,17 @@ onMounted(() => {
                 >
                   <td>{{ device.id }}</td>
                   <td>{{ device.name || '-' }}</td>
-                  <td>{{ device.device_id || '-' }}</td>
-                  <td>{{ device.type || '-' }}</td>
+                  <td>{{ device.ip || device.device_id || '-' }}</td>
+                  <td>{{ device.device_category || device.type || '-' }}</td>
                   <td>{{ device.room_name || '-' }}</td>
+                  <td>{{ formatX(device.x) }}</td>
+                  <td>{{ formatY(device.y) }}</td>
                   <td>
                     <VChip
-                      :color="device.is_active ? 'success' : 'error'"
+                      :color="(device.status === 'active' && !device.disable) || device.is_active ? 'success' : 'error'"
                       size="small"
                     >
-                      {{ device.is_active ? 'เปิดใช้งาน' : 'ปิดใช้งาน' }}
+                      {{ (device.status === 'active' && !device.disable) || device.is_active ? 'เปิดใช้งาน' : 'ปิดใช้งาน' }}
                     </VChip>
                   </td>
                   <td class="text-end">
@@ -171,6 +215,7 @@ onMounted(() => {
                 </tr>
               </tbody>
             </VTable>
+            </div>
             <div
               v-else
               class="text-center py-8"
@@ -183,17 +228,6 @@ onMounted(() => {
               <div class="text-h6 mb-2">
                 ไม่มีอุปกรณ์
               </div>
-              <VBtn
-                color="primary"
-                variant="outlined"
-                :to="{ name: 'devices-create' }"
-              >
-                <VIcon
-                  icon="tabler-plus"
-                  class="me-2"
-                />
-                สร้างอุปกรณ์ใหม่
-              </VBtn>
             </div>
           </VCardText>
         </VCard>

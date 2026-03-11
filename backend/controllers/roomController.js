@@ -4,6 +4,7 @@ const Device = require('../models/Device');
 const DeviceState = require('../models/DeviceState');
 const DevicePosition = require('../models/DevicePosition');
 const { pool } = require('../config/database');
+const roomControlProxyService = require('../services/roomControlProxyService');
 
 class RoomController {
     // Get all rooms
@@ -470,17 +471,43 @@ class RoomController {
         try {
             const roomId = parseInt(req.params.id);
             
-            // Get device positions
-            const positions = await DevicePosition.getByRoom(roomId);
-            
-            // Get device states
-            const deviceStates = await DeviceState.getByRoom(roomId);
+            // Get device positions (จาก rooms.x1,y1,x2,y2 / device_positions; fallback ไป devices หรือ device_positions)
+            let positions;
+            try {
+                positions = await Room.getDevicePositions(roomId);
+            } catch (e1) {
+                try {
+                    positions = await Device.getPositionsByRoom(roomId);
+                } catch (e2) {
+                    console.warn('[RoomController] Room/Device positions failed, using device_positions:', e2.message);
+                    positions = await DevicePosition.getByRoom(roomId);
+                }
+            }
+
+            // Get device states (prefer real control API if configured; fallback to DB)
+            let deviceStates = null;
+            let source = 'db';
+            if (roomControlProxyService.isStatusEnabled()) {
+                try {
+                    const remote = await roomControlProxyService.fetchDeviceStatesByRoomId({ roomId });
+                    if (remote && remote.deviceStates) {
+                        deviceStates = remote.deviceStates;
+                        source = 'control-api';
+                    }
+                } catch (err) {
+                    console.warn('[RoomController] Control API status fetch failed, fallback to DB:', err.message);
+                }
+            }
+            if (!deviceStates) {
+                deviceStates = await DeviceState.getByRoom(roomId);
+            }
             
             res.json({
                 success: true,
                 data: {
                     positions,
-                    deviceStates
+                    deviceStates,
+                    source
                 }
             });
         } catch (error) {
@@ -525,66 +552,297 @@ class RoomController {
                 if (mode !== undefined) settings.mode = mode;
                 if (speed !== undefined) settings.speed = speed;
             }
+
+            // Forward command to real control API first (if configured).
+            // If that fails, DO NOT write DB state to avoid UI showing a false success.
+            const isUsingRealAPI = roomControlProxyService.isControlEnabled();
+            if (isUsingRealAPI) {
+                try {
+                    console.log(`[RoomController] Sending control command to real API:`, {
+                        roomId,
+                        deviceType,
+                        deviceIndex,
+                        status,
+                        statusType: typeof status,
+                        settings,
+                    });
+                    
+                    // If deviceIndex is null (control all), send command for each device individually
+                    if (deviceIndex === null) {
+                        // Get existing device states to know which devices to control
+                        const [existingStates] = await pool.query(
+                            `SELECT device_index FROM device_states 
+                             WHERE room_id = ? AND device_type = ?
+                             ORDER BY device_index ASC`,
+                            [roomId, deviceType]
+                        );
+                        
+                        // Also check device positions (rooms first, then devices / device_positions)
+                        let positions;
+                        try {
+                            positions = await Room.getDevicePositions(roomId);
+                        } catch (e) {
+                            try {
+                                positions = await Device.getPositionsByRoom(roomId);
+                            } catch (e2) {
+                                positions = await DevicePosition.getByRoom(roomId);
+                            }
+                        }
+                        const devicePositions = positions[deviceType] || [];
+                        
+                        // Get unique device indices from both sources
+                        const deviceIndices = new Set();
+                        existingStates.forEach(state => deviceIndices.add(state.device_index));
+                        
+                        // Extract device indices from positions array
+                        if (Array.isArray(devicePositions)) {
+                            devicePositions.forEach((pos, index) => {
+                                if (pos && typeof pos === 'object') {
+                                    // Check if position object has device_index property
+                                    if (pos.device_index !== undefined && pos.device_index !== null) {
+                                        deviceIndices.add(pos.device_index);
+                                    } else {
+                                        // If no device_index, use array index as fallback
+                                        deviceIndices.add(index);
+                                    }
+                                } else {
+                                    // If position is not an object, use array index
+                                    deviceIndices.add(index);
+                                }
+                            });
+                        }
+                        
+                        const uniqueIndices = Array.from(deviceIndices).sort((a, b) => a - b);
+                        
+                        if (uniqueIndices.length > 0) {
+                            console.log(`[RoomController] Sending control commands for ${uniqueIndices.length} devices individually (indices: ${uniqueIndices.join(', ')})`);
+                            // Send command for each device
+                            const controlPromises = uniqueIndices.map(idx => 
+                                roomControlProxyService.controlDeviceByRoomId({
+                                    roomId,
+                                    deviceType,
+                                    deviceIndex: idx,
+                                    status,
+                                    settings,
+                                    requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
+                                }).catch(err => {
+                                    console.error(`[RoomController] Failed to control device ${idx}:`, err.message);
+                                    return { error: err.message, deviceIndex: idx };
+                                })
+                            );
+                            
+                            const results = await Promise.allSettled(controlPromises);
+                            const successful = results.filter(r => r.status === 'fulfilled' && !r.value?.error).length;
+                            const failed = results.filter(r => r.status === 'rejected' || r.value?.error).length;
+                            
+                            console.log(`[RoomController] Control results: ${successful} successful, ${failed} failed`);
+                            
+                            if (failed > 0 && successful === 0) {
+                                // All failed
+                                throw new Error(`ไม่สามารถควบคุมอุปกรณ์ได้ (ล้มเหลวทั้งหมด ${failed} อุปกรณ์)`);
+                            }
+                        } else {
+                            // No existing devices or positions found
+                            // Try to get device states from real API first (if status API is enabled)
+                            if (roomControlProxyService.isStatusEnabled()) {
+                                try {
+                                    console.log(`[RoomController] No local device data found, fetching from real API...`);
+                                    const statusData = await roomControlProxyService.fetchDeviceStatesByRoomId({ roomId });
+                                    const deviceStates = statusData.deviceStates || {};
+                                    const devices = deviceStates[deviceType] || [];
+                                    
+                                    if (Array.isArray(devices) && devices.length > 0) {
+                                        console.log(`[RoomController] Found ${devices.length} devices from real API, sending control commands`);
+                                        // Send command for each device found in real API
+                                        const controlPromises = devices.map((device, index) => 
+                                            roomControlProxyService.controlDeviceByRoomId({
+                                                roomId,
+                                                deviceType,
+                                                deviceIndex: device.device_index !== undefined ? device.device_index : index,
+                                                status,
+                                                settings,
+                                                requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
+                                            }).catch(err => {
+                                                console.error(`[RoomController] Failed to control device ${device.device_index !== undefined ? device.device_index : index}:`, err.message);
+                                                return { error: err.message, deviceIndex: device.device_index !== undefined ? device.device_index : index };
+                                            })
+                                        );
+                                        
+                                        const results = await Promise.allSettled(controlPromises);
+                                        const successful = results.filter(r => r.status === 'fulfilled' && !r.value?.error).length;
+                                        const failed = results.filter(r => r.status === 'rejected' || r.value?.error).length;
+                                        
+                                        console.log(`[RoomController] Control results: ${successful} successful, ${failed} failed`);
+                                        
+                                        if (failed > 0 && successful === 0) {
+                                            throw new Error(`ไม่สามารถควบคุมอุปกรณ์ได้ (ล้มเหลวทั้งหมด ${failed} อุปกรณ์)`);
+                                        }
+                                    } else {
+                                        // No devices found in real API either, try sending command with deviceIndex: null
+                                        console.log(`[RoomController] No devices found in real API, sending command with deviceIndex: null (control all)`);
+                                        const apiResult = await roomControlProxyService.controlDeviceByRoomId({
+                                            roomId,
+                                            deviceType,
+                                            deviceIndex: null,
+                                            status,
+                                            settings,
+                                            requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
+                                        });
+                                        console.log(`[RoomController] Real API response:`, apiResult);
+                                    }
+                                } catch (statusErr) {
+                                    console.warn(`[RoomController] Failed to fetch device states from real API:`, statusErr.message);
+                                    // Fallback: try sending command with deviceIndex: null
+                                    console.log(`[RoomController] Falling back to sending command with deviceIndex: null (control all)`);
+                                    const apiResult = await roomControlProxyService.controlDeviceByRoomId({
+                                        roomId,
+                                        deviceType,
+                                        deviceIndex: null,
+                                        status,
+                                        settings,
+                                        requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
+                                    });
+                                    console.log(`[RoomController] Real API response:`, apiResult);
+                                }
+                            } else {
+                                // No status API, try sending command with deviceIndex: null
+                                console.log(`[RoomController] No local device data found and status API not enabled, sending command with deviceIndex: null (control all)`);
+                                const apiResult = await roomControlProxyService.controlDeviceByRoomId({
+                                    roomId,
+                                    deviceType,
+                                    deviceIndex: null,
+                                    status,
+                                    settings,
+                                    requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
+                                });
+                                console.log(`[RoomController] Real API response:`, apiResult);
+                            }
+                        }
+                    } else {
+                        // Single device control
+                        const apiResult = await roomControlProxyService.controlDeviceByRoomId({
+                            roomId,
+                            deviceType,
+                            deviceIndex,
+                            status,
+                            settings,
+                            requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
+                        });
+                        console.log(`[RoomController] Real API response:`, apiResult);
+                    }
+                } catch (err) {
+                    console.error('[RoomController] Control API call failed:', {
+                        message: err.message,
+                        stack: err.stack,
+                        response: err.response?.data,
+                        status: err.response?.status,
+                        roomId,
+                        deviceType,
+                        deviceIndex,
+                        status,
+                    });
+                    return res.status(502).json({
+                        success: false,
+                        message: 'ไม่สามารถสั่งควบคุมอุปกรณ์ได้ (Control API)',
+                        error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+                    });
+                }
+            }
             
             if (deviceIndex !== null) {
                 // Control single device
                 console.log(`[BACKEND DEBUG] Setting single device state: roomId=${roomId}, type=${deviceType}, index=${deviceIndex}, status=${status}`);
                 await DeviceState.setDeviceState(roomId, deviceType, deviceIndex, status, settings);
             } else {
-                // Control all devices of this type
-                const positions = await DevicePosition.getByRoom(roomId);
+                // Control all devices of this type (positions from rooms, then devices / device_positions)
+                let positions;
+                try {
+                    positions = await Room.getDevicePositions(roomId);
+                } catch (e) {
+                    try {
+                        positions = await Device.getPositionsByRoom(roomId);
+                    } catch (e2) {
+                        positions = await DevicePosition.getByRoom(roomId);
+                    }
+                }
                 const devicePositions = positions[deviceType] || [];
                 
                 console.log(`[BACKEND DEBUG] Setting multiple device states: roomId=${roomId}, type=${deviceType}`);
                 console.log(`[BACKEND DEBUG] Device positions from DB:`, devicePositions);
                 console.log(`[BACKEND DEBUG] Device positions count: ${devicePositions.length}`);
                 
-                // IMPORTANT: Check BOTH device positions AND existing device_states
-                // Use the MAXIMUM count to ensure we update ALL existing devices
-                let deviceCount = devicePositions.length;
-                
-                // Always check existing device_states
-                console.log(`[BACKEND DEBUG] Checking existing device states for maximum count...`);
-                const [existingStates] = await pool.query(
-                    `SELECT MAX(device_index) as max_index FROM device_states 
-                     WHERE room_id = ? AND device_type = ?`,
-                    [roomId, deviceType]
-                );
-                
-                if (existingStates.length > 0 && existingStates[0].max_index !== null) {
-                    const existingCount = existingStates[0].max_index + 1;
-                    console.log(`[BACKEND DEBUG] Found ${existingCount} existing device_states`);
-                    // Use the MAXIMUM of positions count and existing states count
-                    deviceCount = Math.max(deviceCount, existingCount);
-                    console.log(`[BACKEND DEBUG] Using maximum count: ${deviceCount}`);
-                } else if (deviceCount === 0) {
-                    // No device data found at all, create default devices
-                    console.log(`[BACKEND DEBUG] No device data found, creating default devices for type ${deviceType}`);
-                    const defaultCounts = {
-                        light: 14,
-                        ac: 3,
-                        erv: 3
-                    };
-                    deviceCount = defaultCounts[deviceType] || 0;
-                    if (deviceCount === 0) {
-                        console.error(`[BACKEND DEBUG] ERROR: Unknown device type ${deviceType}`);
-                        return res.status(400).json({
-                            success: false,
-                            message: `ไม่รู้จักประเภทอุปกรณ์ ${deviceType}`
-                        });
+                // When using real API, only update existing devices - don't create new ones
+                if (isUsingRealAPI) {
+                    // Get existing device states only
+                    console.log(`[BACKEND DEBUG] Using real API - only updating existing device states`);
+                    const [existingStates] = await pool.query(
+                        `SELECT device_index FROM device_states 
+                         WHERE room_id = ? AND device_type = ?
+                         ORDER BY device_index ASC`,
+                        [roomId, deviceType]
+                    );
+                    
+                    if (existingStates.length === 0) {
+                        console.log(`[BACKEND DEBUG] No existing device states found - skipping DB update (real API handles control)`);
+                        // Don't create any devices when using real API
+                        // The real API controls the actual devices, we just sync status later
+                    } else {
+                        // Only update existing devices
+                        console.log(`[BACKEND DEBUG] Found ${existingStates.length} existing device states - updating them`);
+                        for (const state of existingStates) {
+                            await DeviceState.setDeviceState(roomId, deviceType, state.device_index, status, settings);
+                        }
+                        console.log(`[BACKEND DEBUG] Successfully updated ${existingStates.length} existing device states`);
                     }
-                    console.log(`[BACKEND DEBUG] Creating ${deviceCount} default ${deviceType} devices with status=false`);
+                } else {
+                    // Original logic for non-real-API mode
+                    // IMPORTANT: Check BOTH device positions AND existing device_states
+                    // Use the MAXIMUM count to ensure we update ALL existing devices
+                    let deviceCount = devicePositions.length;
+                    
+                    // Always check existing device_states
+                    console.log(`[BACKEND DEBUG] Checking existing device states for maximum count...`);
+                    const [existingStates] = await pool.query(
+                        `SELECT MAX(device_index) as max_index FROM device_states 
+                         WHERE room_id = ? AND device_type = ?`,
+                        [roomId, deviceType]
+                    );
+                    
+                    if (existingStates.length > 0 && existingStates[0].max_index !== null) {
+                        const existingCount = existingStates[0].max_index + 1;
+                        console.log(`[BACKEND DEBUG] Found ${existingCount} existing device_states`);
+                        // Use the MAXIMUM of positions count and existing states count
+                        deviceCount = Math.max(deviceCount, existingCount);
+                        console.log(`[BACKEND DEBUG] Using maximum count: ${deviceCount}`);
+                    } else if (deviceCount === 0) {
+                        // No device data found at all, create default devices
+                        console.log(`[BACKEND DEBUG] No device data found, creating default devices for type ${deviceType}`);
+                        const defaultCounts = {
+                            light: 14,
+                            ac: 3,
+                            erv: 3
+                        };
+                        deviceCount = defaultCounts[deviceType] || 0;
+                        if (deviceCount === 0) {
+                            console.error(`[BACKEND DEBUG] ERROR: Unknown device type ${deviceType}`);
+                            return res.status(400).json({
+                                success: false,
+                                message: `ไม่รู้จักประเภทอุปกรณ์ ${deviceType}`
+                            });
+                        }
+                        console.log(`[BACKEND DEBUG] Creating ${deviceCount} default ${deviceType} devices with status=false`);
+                    }
+                    
+                    const states = Array(deviceCount).fill(null).map(() => ({
+                        status: status,
+                        settings: settings
+                    }));
+                    
+                    console.log(`[BACKEND DEBUG] Creating ${states.length} device states with status=${status}`);
+                    const result = await DeviceState.setMultipleStates(roomId, deviceType, states);
+                    console.log(`[BACKEND DEBUG] setMultipleStates result:`, result);
+                    console.log(`[BACKEND DEBUG] Successfully saved ${states.length} device states to database`);
                 }
-                
-                const states = Array(deviceCount).fill(null).map(() => ({
-                    status: status,
-                    settings: settings
-                }));
-                
-                console.log(`[BACKEND DEBUG] Creating ${states.length} device states with status=${status}`);
-                const result = await DeviceState.setMultipleStates(roomId, deviceType, states);
-                console.log(`[BACKEND DEBUG] setMultipleStates result:`, result);
-                console.log(`[BACKEND DEBUG] Successfully saved ${states.length} device states to database`);
             }
             
             res.json({
@@ -602,11 +860,23 @@ class RoomController {
         }
     }
 
-    // Get device positions
+    // Get device positions (จาก rooms; fallback ไป devices / device_positions)
     async getDevicePositions(req, res) {
         try {
             const roomId = parseInt(req.params.id);
-            const positions = await DevicePosition.getByRoom(roomId);
+            let positions;
+            try {
+                positions = await Room.getDevicePositions(roomId);
+            } catch (e1) {
+                try {
+                    positions = await Device.getPositionsByRoom(roomId);
+                } catch (e2) {
+                    positions = await DevicePosition.getByRoom(roomId);
+                }
+            }
+            if (!positions.light) positions.light = [];
+            if (!positions.ac) positions.ac = [];
+            if (!positions.erv) positions.erv = [];
             
             res.json({
                 success: true,
@@ -621,7 +891,7 @@ class RoomController {
         }
     }
 
-    // Save device positions
+    // Save device positions (ลง rooms; fallback ไป devices / device_positions)
     async saveDevicePositions(req, res) {
         try {
             const roomId = parseInt(req.params.id);
@@ -634,7 +904,20 @@ class RoomController {
                 });
             }
             
-            await DevicePosition.setAllPositions(roomId, positions);
+            try {
+                await Room.setDevicePositions(roomId, positions);
+                console.log('[RoomController] บันทึกตำแหน่งลง rooms แล้ว roomId=', roomId);
+            } catch (e1) {
+                console.warn('[RoomController] Room.setDevicePositions ล้มเหลว:', e1.message);
+                try {
+                    await Device.setPositionsByRoom(roomId, positions);
+                    console.log('[RoomController] บันทึกตำแหน่งลง devices (fallback) roomId=', roomId);
+                } catch (e2) {
+                    console.warn('[RoomController] Device fallback ล้มเหลว:', e2.message);
+                    await DevicePosition.setAllPositions(roomId, positions);
+                    console.log('[RoomController] บันทึกตำแหน่งลง device_positions (fallback)');
+                }
+            }
             
             res.json({
                 success: true,

@@ -80,8 +80,8 @@ class Area {
 
     static async create(data) {
         const [result] = await pool.query(
-            'INSERT INTO areas (name, name_en, description, building_id, email, disable) VALUES (?, ?, ?, ?, ?, 0)',
-            [data.name, data.name_en || null, data.description || null, data.building_id, data.email || null]
+            'INSERT INTO areas (name, name_en, description, building_id, floor, email, disable, image) VALUES (?, ?, ?, ?, ?, ?, 0, ?)',
+            [data.name, data.name_en || null, data.description || null, data.building_id, data.floor != null ? Number(data.floor) : null, data.email || null, data.image || null]
         );
         return { id: result.insertId, ...data };
     }
@@ -90,7 +90,7 @@ class Area {
         const updates = [];
         const params = [];
 
-        const allowedFields = ['name', 'name_en', 'description', 'building_id', 'email', 'disable'];
+        const allowedFields = ['name', 'name_en', 'description', 'building_id', 'floor', 'email', 'disable', 'image'];
         
         for (const field of allowedFields) {
             if (data[field] !== undefined) {

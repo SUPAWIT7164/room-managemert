@@ -1,4 +1,5 @@
 const { pool } = require('../config/database');
+const sql = require('mssql');
 
 class DeviceState {
     // Get all device states for a room
@@ -38,12 +39,17 @@ class DeviceState {
         // Fill in the actual states
         rows.forEach(row => {
             if (grouped[row.device_type] && row.device_index >= 0) {
-                // Convert status to boolean - handle both 0/1 and true/false
+                // Convert status to boolean - handle 0/1, true/false, string, SQL Server bit (อาจเป็น Buffer)
                 let statusValue = false;
-                if (row.status === 1 || row.status === true || row.status === '1' || row.status === 'true') {
+                const raw = row.status;
+                if (raw === 1 || raw === true || raw === '1' || raw === 'true') {
                     statusValue = true;
-                } else if (row.status === 0 || row.status === false || row.status === '0' || row.status === 'false') {
+                } else if (raw === 0 || raw === false || raw === '0' || raw === 'false') {
                     statusValue = false;
+                } else if (raw != null) {
+                    // SQL Server bit / Buffer หรือค่าอื่น: แปลงเป็นตัวเลขแล้วถือ 0 = ปิด, อื่น = เปิด
+                    const n = Buffer.isBuffer(raw) ? raw[0] : Number(raw);
+                    statusValue = !Number.isNaN(n) && n !== 0;
                 }
                 grouped[row.device_type][row.device_index] = {
                     status: statusValue,
@@ -74,77 +80,62 @@ class DeviceState {
         };
     }
     
-    // Set device state (create or update)
+    // Set device state (create or update) - SQL Server compatible
     static async setDeviceState(roomId, deviceType, deviceIndex, status, settings = null) {
         const settingsJson = settings ? JSON.stringify(settings) : null;
+        const statusValue = status ? 1 : 0;
         
-        await pool.query(
-            `INSERT INTO device_states (room_id, device_type, device_index, status, settings)
-             VALUES (?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE status = VALUES(status), settings = VALUES(settings)`,
-            [roomId, deviceType, deviceIndex, status ? 1 : 0, settingsJson]
+        // Check if record exists
+        const [existing] = await pool.query(
+            `SELECT status FROM device_states 
+             WHERE room_id = ? AND device_type = ? AND device_index = ?`,
+            [roomId, deviceType, deviceIndex]
         );
+        
+        if (existing.length > 0) {
+            // Update existing record
+            await pool.query(
+                `UPDATE device_states 
+                 SET status = ?, settings = ?, updated_at = GETDATE()
+                 WHERE room_id = ? AND device_type = ? AND device_index = ?`,
+                [statusValue, settingsJson, roomId, deviceType, deviceIndex]
+            );
+        } else {
+            // Insert new record
+            await pool.query(
+                `INSERT INTO device_states (room_id, device_type, device_index, status, settings, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, GETDATE(), GETDATE())`,
+                [roomId, deviceType, deviceIndex, statusValue, settingsJson]
+            );
+        }
         
         return true;
     }
     
-    // Set multiple device states at once
+    // Set multiple device states at once - SQL Server compatible
     static async setMultipleStates(roomId, deviceType, states) {
-        const connection = await pool.getConnection();
+        // Get the actual SQL Server pool from database config
+        const { pool: actualPool } = require('../config/database');
+        const sql = require('mssql');
+        
+        // For SQL Server, we need to get the actual ConnectionPool instance
+        // The poolWrapper.getConnection() returns the pool itself, but we need the actual pool
+        // Let's use the pool directly without transaction for now (or use SQL Server transaction API)
+        
+        // Since SQL Server transactions are more complex, let's do it without explicit transaction
+        // Each query will be atomic, and if one fails, we'll catch and report it
+        console.log(`[BACKEND DEBUG] setMultipleStates: roomId=${roomId}, type=${deviceType}, states count=${states.length}`);
+        
         try {
-            await connection.beginTransaction();
-            
-            console.log(`[BACKEND DEBUG] setMultipleStates: roomId=${roomId}, type=${deviceType}, states count=${states.length}`);
             for (let i = 0; i < states.length; i++) {
                 const settingsJson = states[i].settings ? JSON.stringify(states[i].settings) : null;
                 const statusValue = states[i].status ? 1 : 0;
                 console.log(`[BACKEND DEBUG] Saving device state: index=${i}, status=${states[i].status} (${statusValue})`);
                 
                 try {
-                    // First, check if record exists
-                    const [checkResult] = await connection.query(
-                        `SELECT status FROM device_states 
-                         WHERE room_id = ? AND device_type = ? AND device_index = ?`,
-                        [roomId, deviceType, i]
-                    );
-                    
-                    if (checkResult.length > 0) {
-                        const currentStatus = checkResult[0].status;
-                        console.log(`[BACKEND DEBUG] Existing record found at index ${i}: current status=${currentStatus} (${typeof currentStatus}), new status=${statusValue}`);
-                        
-                        // Update existing record
-                        const [updateResult] = await connection.query(
-                            `UPDATE device_states 
-                             SET status = ?, settings = ?, updated_at = CURRENT_TIMESTAMP
-                             WHERE room_id = ? AND device_type = ? AND device_index = ?`,
-                            [statusValue, settingsJson, roomId, deviceType, i]
-                        );
-                        
-                        console.log(`[BACKEND DEBUG] Updated existing device state at index ${i}:`, {
-                            affectedRows: updateResult.affectedRows,
-                            changedRows: updateResult.changedRows || 0
-                        });
-                        
-                        // Verify the update actually changed the value
-                        if (updateResult.affectedRows === 0) {
-                            console.error(`[BACKEND DEBUG] ERROR: Update did not affect any rows at index ${i}!`);
-                        } else if (updateResult.changedRows === 0) {
-                            console.log(`[BACKEND DEBUG] WARNING: Update did not change any rows - value may already be ${statusValue}`);
-                        } else {
-                            console.log(`[BACKEND DEBUG] SUCCESS: Updated device state at index ${i} from ${currentStatus} to ${statusValue}`);
-                        }
-                    } else {
-                        console.log(`[BACKEND DEBUG] No existing record found, inserting new device state at index ${i}`);
-                        const [insertResult] = await connection.query(
-                            `INSERT INTO device_states (room_id, device_type, device_index, status, settings)
-                             VALUES (?, ?, ?, ?, ?)`,
-                            [roomId, deviceType, i, statusValue, settingsJson]
-                        );
-                        console.log(`[BACKEND DEBUG] Inserted new device state at index ${i}:`, {
-                            affectedRows: insertResult.affectedRows,
-                            insertId: insertResult.insertId
-                        });
-                    }
+                    // Use setDeviceState which handles upsert correctly
+                    await this.setDeviceState(roomId, deviceType, i, states[i].status, states[i].settings);
+                    console.log(`[BACKEND DEBUG] Successfully saved device state at index ${i}`);
                 } catch (queryError) {
                     console.error(`[BACKEND DEBUG] Error saving device state at index ${i}:`, queryError);
                     console.error(`[BACKEND DEBUG] Error code:`, queryError.code);
@@ -155,16 +146,12 @@ class DeviceState {
                 }
             }
             
-            await connection.commit();
-            console.log(`[BACKEND DEBUG] Successfully committed ${states.length} device states to database`);
+            console.log(`[BACKEND DEBUG] Successfully saved ${states.length} device states to database`);
             return true;
         } catch (error) {
-            await connection.rollback();
             console.error(`[BACKEND DEBUG] Error in setMultipleStates:`, error);
             console.error(`[BACKEND DEBUG] Error stack:`, error.stack);
             throw error;
-        } finally {
-            connection.release();
         }
     }
     

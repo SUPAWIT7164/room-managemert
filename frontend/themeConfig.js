@@ -1,13 +1,17 @@
+import { h } from 'vue'
 import { breakpointsVuetifyV3 } from '@vueuse/core'
 import { VIcon } from 'vuetify/components/VIcon'
 import { defineThemeConfig } from '@core'
 import { Skins } from '@core/enums'
 import { AppContentLayoutNav, ContentWidth, FooterType, NavbarType } from '@layouts/enums'
 
+// Import logo so Vite bundles it — ใช้ path relative จาก themeConfig.js (root) เพื่อให้ build ได้ URL จริง
+import logoImage from './src/assets/images/unnamed-1.png'
+
 export const { themeConfig, layoutConfig } = defineThemeConfig({
   app: {
     title: 'RMUTI Room Management',
-    logo: h('img', { src: '/src/assets/images/unnamed-1.png', alt: 'RMUTI Logo', style: 'height: 40px' }),
+    logo: h('img', { src: logoImage, alt: 'RMUTI Logo', style: 'height: 40px' }),
     contentWidth: ContentWidth.Boxed,
     contentLayoutNav: AppContentLayoutNav.Vertical,
     overlayNavFromBreakpoint: breakpointsVuetifyV3.lg - 1, // 1 for matching with vuetify breakpoint. Docs: https://next.vuetifyjs.com/en/features/display-and-platform/

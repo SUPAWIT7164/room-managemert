@@ -8,14 +8,24 @@ class ReportController {
             const { start, end, user_id } = req.query;
             
             let query = `
-                SELECT br.*, 
+                SELECT br.id, br.name,
+                       FORMAT(br.[start], 'yyyy-MM-dd HH:mm:ss') as start_datetime,
+                       FORMAT(br.[end], 'yyyy-MM-dd HH:mm:ss') as end_datetime,
+                       br.hour, br.objective, br.attendees,
+                       CASE 
+                           WHEN br.[cancel] = 1 THEN 'cancelled'
+                           WHEN br.[reject] = 1 THEN 'rejected'
+                           WHEN CAST(br.status AS NVARCHAR(50)) IN ('1', 'approved') THEN 'approved'
+                           ELSE 'pending'
+                       END as status,
+                       br.created_at, br.updated_at,
                        r.name as room_name,
                        u.name as booker_name, u.email as booker_email,
                        a.name as area_name,
                        b.name as building_name
                 FROM booking_requests br
-                LEFT JOIN rooms r ON br.room_id = r.id
-                LEFT JOIN users u ON br.user_id = u.id
+                LEFT JOIN rooms r ON br.[room] = r.id
+                LEFT JOIN users u ON br.booker = u.id
                 LEFT JOIN areas a ON r.area_id = a.id
                 LEFT JOIN buildings b ON a.building_id = b.id
                 WHERE 1=1
@@ -23,21 +33,21 @@ class ReportController {
             const params = [];
 
             if (start) {
-                query += ' AND DATE(br.start_datetime) >= ?';
+                query += ' AND CAST(br.[start] AS DATE) >= ?';
                 params.push(start);
             }
 
             if (end) {
-                query += ' AND DATE(br.start_datetime) <= ?';
+                query += ' AND CAST(br.[start] AS DATE) <= ?';
                 params.push(end);
             }
 
             if (user_id) {
-                query += ' AND br.user_id = ?';
+                query += ' AND br.booker = ?';
                 params.push(user_id);
             }
 
-            query += ' ORDER BY br.start_datetime DESC';
+            query += ' ORDER BY br.[start] DESC';
 
             const [rows] = await pool.query(query, params);
 
@@ -45,8 +55,7 @@ class ReportController {
                 ...row,
                 start_time: row.start_datetime,
                 end_time: row.end_datetime,
-                title: row.title || row.name,
-                name: row.title || row.name
+                title: row.name,
             }));
 
             res.json({
@@ -67,31 +76,29 @@ class ReportController {
         try {
             const { start, end, room_id } = req.query;
             
-            // Build base query
             let query = `
                 SELECT 
                     r.id as room_id,
                     r.name as room_name,
                     b.name as building_name,
                     COUNT(br.id) as booking_count,
-                    COALESCE(SUM(
-                        TIMESTAMPDIFF(HOUR, br.start_datetime, br.end_datetime)
-                    ), 0) as total_hours
+                    COALESCE(SUM(br.hour), 0) as total_hours
                 FROM rooms r
                 LEFT JOIN areas a ON r.area_id = a.id
                 LEFT JOIN buildings b ON a.building_id = b.id
-                LEFT JOIN booking_requests br ON br.room_id = r.id 
-                    AND br.status = 'approved'
+                LEFT JOIN booking_requests br ON br.[room] = r.id 
+                    AND CAST(br.status AS NVARCHAR(50)) IN ('1', 'approved')
+                    AND (br.[cancel] IS NULL OR br.[cancel] = 0)
+                    AND (br.[reject] IS NULL OR br.[reject] = 0)
             `;
             const params = [];
 
-            // Add date filters to JOIN condition
             if (start) {
-                query += ' AND DATE(br.start_datetime) >= ?';
+                query += ' AND CAST(br.[start] AS DATE) >= ?';
                 params.push(start);
             }
             if (end) {
-                query += ' AND DATE(br.start_datetime) <= ?';
+                query += ' AND CAST(br.[start] AS DATE) <= ?';
                 params.push(end);
             }
 
@@ -106,8 +113,6 @@ class ReportController {
 
             const [rows] = await pool.query(query, params);
 
-            // Calculate total bookings for usage rate
-            const totalBookings = rows.reduce((sum, row) => sum + row.booking_count, 0);
             const maxBookings = Math.max(...rows.map(r => r.booking_count), 1);
 
             const data = rows.map(row => ({
@@ -144,11 +149,16 @@ class ReportController {
             let query = `
                 SELECT 
                     br.id,
-                    br.title,
-                    br.description,
-                    br.start_datetime,
-                    br.end_datetime,
-                    br.status,
+                    br.name as title,
+                    br.objective as description,
+                    FORMAT(br.[start], 'yyyy-MM-dd HH:mm:ss') as start_datetime,
+                    FORMAT(br.[end], 'yyyy-MM-dd HH:mm:ss') as end_datetime,
+                    CASE 
+                        WHEN br.[cancel] = 1 THEN 'cancelled'
+                        WHEN br.[reject] = 1 THEN 'rejected'
+                        WHEN CAST(br.status AS NVARCHAR(50)) IN ('1', 'approved') THEN 'approved'
+                        ELSE 'pending'
+                    END as status,
                     br.created_at,
                     br.updated_at,
                     r.id as room_id,
@@ -161,23 +171,30 @@ class ReportController {
                     b.name as building_name,
                     approver.name as approved_by_name
                 FROM booking_requests br
-                LEFT JOIN rooms r ON br.room_id = r.id
-                LEFT JOIN users u ON br.user_id = u.id
+                LEFT JOIN rooms r ON br.[room] = r.id
+                LEFT JOIN users u ON br.booker = u.id
                 LEFT JOIN areas a ON r.area_id = a.id
                 LEFT JOIN buildings b ON a.building_id = b.id
-                LEFT JOIN users approver ON br.approved_by = approver.id
-                WHERE DATE(br.start_datetime) >= ? AND DATE(br.end_datetime) <= ?
+                LEFT JOIN users approver ON br.approve_by = approver.id
+                WHERE CAST(br.[start] AS DATE) >= ? AND CAST(br.[end] AS DATE) <= ?
             `;
             const params = [start_date, end_date];
 
             if (room_id) {
-                query += ' AND br.room_id = ?';
+                query += ' AND br.[room] = ?';
                 params.push(room_id);
             }
 
             if (status) {
-                query += ' AND br.status = ?';
-                params.push(status);
+                if (status === 'approved') {
+                    query += ' AND CAST(br.status AS NVARCHAR(50)) IN (\'1\', \'approved\') AND (br.[cancel] IS NULL OR br.[cancel] = 0) AND (br.[reject] IS NULL OR br.[reject] = 0)';
+                } else if (status === 'cancelled') {
+                    query += ' AND br.[cancel] = 1';
+                } else if (status === 'rejected') {
+                    query += ' AND br.[reject] = 1';
+                } else if (status === 'pending') {
+                    query += ' AND (br.status IS NULL OR CAST(br.status AS NVARCHAR(50)) NOT IN (\'1\', \'approved\')) AND (br.[cancel] IS NULL OR br.[cancel] = 0) AND (br.[reject] IS NULL OR br.[reject] = 0)';
+                }
             }
 
             if (building_id) {
@@ -185,11 +202,10 @@ class ReportController {
                 params.push(building_id);
             }
 
-            query += ' ORDER BY br.start_datetime DESC';
+            query += ' ORDER BY br.[start] DESC';
 
             const [rows] = await pool.query(query, params);
 
-            // Calculate statistics
             const stats = {
                 total: rows.length,
                 approved: rows.filter(r => r.status === 'approved').length,
@@ -225,22 +241,23 @@ class ReportController {
                 });
             }
 
-            // Note: This assumes you have an access_logs or similar table
-            // If not, you might need to create it or use booking data as access data
+            // Use booking_requests: columns [start], [room], status (BIT). Approved = status=1, not cancelled/rejected.
             let query = `
                 SELECT 
-                    DATE(br.start_datetime) as access_date,
-                    COUNT(DISTINCT br.user_id) as unique_users,
+                    CAST(br.[start] AS DATE) as access_date,
+                    COUNT(DISTINCT br.booker) as unique_users,
                     COUNT(br.id) as total_access,
                     b.id as building_id,
                     b.name as building_name
                 FROM booking_requests br
-                LEFT JOIN rooms r ON br.room_id = r.id
+                LEFT JOIN rooms r ON br.[room] = r.id
                 LEFT JOIN areas a ON r.area_id = a.id
                 LEFT JOIN buildings b ON a.building_id = b.id
-                WHERE br.status = 'approved'
-                    AND DATE(br.start_datetime) >= ?
-                    AND DATE(br.start_datetime) <= ?
+                WHERE CAST(br.status AS NVARCHAR(50)) IN ('1', 'approved')
+                    AND (br.[cancel] IS NULL OR br.[cancel] = 0)
+                    AND (br.[reject] IS NULL OR br.[reject] = 0)
+                    AND CAST(br.[start] AS DATE) >= ?
+                    AND CAST(br.[start] AS DATE) <= ?
             `;
             const params = [start_date, end_date];
 
@@ -249,13 +266,14 @@ class ReportController {
                 params.push(...building_ids);
             }
 
-            query += ' GROUP BY DATE(br.start_datetime), b.id, b.name ORDER BY access_date DESC';
+            query += ' GROUP BY CAST(br.[start] AS DATE), b.id, b.name ORDER BY CAST(br.[start] AS DATE) DESC';
 
             const [rows] = await pool.query(query, params);
+            const data = Array.isArray(rows) ? rows : (rows ? [rows] : []);
 
             res.json({
                 success: true,
-                data: rows
+                data
             });
         } catch (error) {
             console.error('Access report error:', error);
@@ -279,40 +297,37 @@ class ReportController {
                 });
             }
 
-            let dateFormat;
+            let dateExpr;
             switch (report_type) {
-                case 'daily':
-                    dateFormat = '%Y-%m-%d';
-                    break;
                 case 'weekly':
-                    dateFormat = '%Y-%u'; // Year-Week
+                    dateExpr = "FORMAT(br.[start], 'yyyy') + '-W' + RIGHT('0' + CAST(DATEPART(WEEK, br.[start]) AS VARCHAR), 2)";
                     break;
                 case 'monthly':
-                    dateFormat = '%Y-%m';
+                    dateExpr = "FORMAT(br.[start], 'yyyy-MM')";
                     break;
                 default:
-                    dateFormat = '%Y-%m-%d';
+                    dateExpr = "FORMAT(br.[start], 'yyyy-MM-dd')";
             }
 
             let query = `
                 SELECT 
-                    DATE_FORMAT(br.start_datetime, ?) as period,
+                    ${dateExpr} as period,
                     r.id as room_id,
                     r.name as room_name,
                     COUNT(br.id) as booking_count,
-                    COALESCE(SUM(
-                        TIMESTAMPDIFF(HOUR, br.start_datetime, br.end_datetime)
-                    ), 0) as total_hours,
-                    COUNT(DISTINCT br.user_id) as unique_users
+                    COALESCE(SUM(br.hour), 0) as total_hours,
+                    COUNT(DISTINCT br.booker) as unique_users
                 FROM booking_requests br
-                LEFT JOIN rooms r ON br.room_id = r.id
-                WHERE br.status = 'approved'
-                    AND DATE(br.start_datetime) >= ?
-                    AND DATE(br.end_datetime) <= ?
-                GROUP BY period, r.id, r.name
-                ORDER BY period DESC, booking_count DESC
+                LEFT JOIN rooms r ON br.[room] = r.id
+                WHERE CAST(br.status AS NVARCHAR(50)) IN ('1', 'approved')
+                    AND (br.[cancel] IS NULL OR br.[cancel] = 0)
+                    AND (br.[reject] IS NULL OR br.[reject] = 0)
+                    AND CAST(br.[start] AS DATE) >= ?
+                    AND CAST(br.[end] AS DATE) <= ?
+                GROUP BY ${dateExpr}, r.id, r.name
+                ORDER BY ${dateExpr} DESC, booking_count DESC
             `;
-            const params = [dateFormat, start_date, end_date];
+            const params = [start_date, end_date];
 
             const [rows] = await pool.query(query, params);
 

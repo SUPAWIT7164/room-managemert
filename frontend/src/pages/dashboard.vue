@@ -349,7 +349,7 @@ onMounted(() => {
               variant="text"
               size="small"
               prepend-icon="tabler-arrow-right"
-              :to="{ name: 'bookings-calendar' }"
+              :to="{ name: 'bookings-avaliable' }"
             >
               ดูทั้งหมด
             </VBtn>
@@ -491,7 +491,7 @@ onMounted(() => {
                 block
                 size="large"
                 prepend-icon="tabler-bookmark"
-                :to="{ name: 'bookings-calendar' }"
+                :to="{ name: 'bookings-avaliable' }"
               >
                 การจองของฉัน
               </VBtn>
@@ -501,9 +501,9 @@ onMounted(() => {
                 block
                 size="large"
                 prepend-icon="tabler-calendar"
-                :to="{ name: 'bookings-calendar' }"
+                :to="{ name: 'bookings-avaliable' }"
               >
-                ดูปฏิทิน
+                ตารางห้องว่าง
               </VBtn>
             </div>
           </VCardText>
@@ -685,10 +685,37 @@ onMounted(() => {
   border-left: 4px solid rgb(var(--v-theme-error));
 }
 
-/* Responsive adjustments */
-@media (max-width: 960px) {
+/* ===== Responsive adjustments ===== */
+@media (max-width: 959.98px) {
   .stats-card {
     margin-bottom: 16px;
+  }
+
+  .booking-item {
+    padding: 12px 16px;
+  }
+}
+
+@media (max-width: 599.98px) {
+  .stats-card .text-h3 {
+    font-size: 1.5rem !important;
+  }
+
+  .stats-icon {
+    width: 3rem !important;
+    height: 3rem !important;
+  }
+
+  .stats-icon .v-icon {
+    font-size: 1.5rem !important;
+  }
+
+  .booking-item {
+    padding: 0.625rem 0.75rem;
+  }
+
+  .room-card {
+    margin-bottom: 0.5rem;
   }
 }
 </style>

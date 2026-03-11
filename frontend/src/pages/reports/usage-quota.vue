@@ -25,6 +25,38 @@ const snackbar = ref(false)
 const snackbarText = ref('')
 const snackbarColor = ref('success')
 
+// Fallback labels by slug (เมื่อ name จาก API เสีย encoding) — ตรงกับโปรเจกต์เดิม SettingSeeder
+const SLUG_LABEL_FALLBACK = {
+  'booking-per-week': 'จำนวนครั้งการจองใน 1 อาทิตย์',
+  'booking-per-day': 'จำนวนครั้งการจองใน 1 วัน',
+  'booking-ahead-day': 'จำนวนวันในการจองล่วงหน้า',
+  'booking-hour-max': 'ชั่วโมงการจองสูงสุด',
+  'booking-hour-min': 'ชั่วโมงการจองขั้นต่ำ',
+  'before-start': 'สามารถเข้าห้องได้ก่อนเวลา',
+  'after-end': 'สามารถเข้าห้องได้หลังจบการจอง',
+  'after-start': 'ยกเลิกตารางหากผู้จองไม่มาใช้งานภายใน',
+  'booking-start': 'เวลาเริ่มต้นการแสดงตาราง',
+  'booking-end': 'เวลาสิ้นสุดการแสดงตาราง',
+}
+
+// แสดงข้อความที่ปลอดภัย — ถ้าเป็น null/undefined หรือเป็นข้อความเสีย (????????) ให้ใช้ fallback
+const safeLabel = (name, unit, slug) => {
+  const raw = (name != null && String(name).trim() !== '') ? String(name).trim() : ''
+  const hasInvalidChars = !raw || /^\?+$/.test(raw) || /^\uFFFD+$/.test(raw)
+  const displayName = hasInvalidChars
+    ? (slug && SLUG_LABEL_FALLBACK[slug]) || 'ไม่ระบุชื่อ (ข้อมูลอาจเสีย encoding)'
+    : raw
+  const u = (unit != null && String(unit).trim() !== '') ? String(unit).trim() : ''
+  return u ? `${displayName} (${u})` : displayName
+}
+
+const safeValue = (val) => {
+  if (val == null) return ''
+  const s = String(val).trim()
+  if (/^\?+$/.test(s) || /^\uFFFD+$/.test(s)) return ''
+  return s
+}
+
 const fetchQuotaSettings = async () => {
   loading.value = true
   try {
@@ -32,9 +64,9 @@ const fetchQuotaSettings = async () => {
     const settings = response.data.data || []
     quotaSettings.value = settings
     
-    // Initialize edited values with current values
+    // Initialize edited values with current values (ใช้ safeValue เพื่อไม่ให้แสดง ????)
     settings.forEach(setting => {
-      editedValues[setting.id] = setting.value || ''
+      editedValues[setting.id] = safeValue(setting.value)
     })
   } catch (error) {
     console.error('Error fetching quota settings:', error)
@@ -87,7 +119,7 @@ const confirmSave = async () => {
       showSnackbar('การตั้งค่าถูกบันทึกเรียบร้อยแล้ว', 'success')
     } else {
       // Response was successful but success flag is false
-      editedValues[setting.id] = setting.value || ''
+      editedValues[setting.id] = safeValue(setting.value)
       showSnackbar('การบันทึกไม่สำเร็จ', 'error')
     }
   } catch (error) {
@@ -97,7 +129,7 @@ const confirmSave = async () => {
     loadingDialog.value = false
     
     // Revert to original value on error
-    editedValues[setting.id] = setting.value || ''
+    editedValues[setting.id] = safeValue(setting.value)
     
     // Show error message
     const errorMessage = error.response?.data?.message || error.message || 'เกิดข้อผิดพลาดในการบันทึก'
@@ -121,7 +153,7 @@ const saveSetting = async (setting) => {
 }
 
 const hasChanges = (setting) => {
-  return editedValues[setting.id] !== (setting.value || '')
+  return editedValues[setting.id] !== safeValue(setting.value)
 }
 
 onMounted(() => {
@@ -198,7 +230,7 @@ onMounted(() => {
                       :for="'setting-' + setting.id"
                       class="setting-label"
                     >
-                      {{ setting.name }}{{ setting.unit ? ' (' + setting.unit + ')' : '' }}
+                      {{ safeLabel(setting.name, setting.unit, setting.slug) }}
                     </label>
                     <div class="setting-input-group">
                       <AppTextField

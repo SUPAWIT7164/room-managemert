@@ -39,7 +39,9 @@
  */
 export const registerPlugins = app => {
   const imports = import.meta.glob(['../../plugins/*.{ts,js}', '../../plugins/*/index.{ts,js}'], { eager: true })
-  const importPaths = Object.keys(imports).sort()
+  const importPaths = Object.keys(imports)
+    .filter(p => !p.includes('fake-api')) // ปิดโหลด fake-api (ใช้ real backend)
+    .sort()
 
   importPaths.forEach(path => {
     const pluginImportModule = imports[path]

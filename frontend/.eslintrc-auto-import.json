@@ -361,6 +361,7 @@
     "watchTriggerable": true,
     "watchWithFilter": true,
     "whenever": true,
-    "api": true
+    "api": true,
+    "getBuildingImageUrl": true
   }
 }

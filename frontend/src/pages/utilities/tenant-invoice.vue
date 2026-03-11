@@ -329,6 +329,7 @@ onMounted(() => {
           <h3 class="text-h5 font-weight-bold mb-4">
             รายละเอียดค่าใช้จ่าย
           </h3>
+          <div class="table-responsive">
           <VTable class="expense-table">
             <thead>
               <tr>
@@ -404,6 +405,7 @@ onMounted(() => {
               </tr>
             </tfoot>
           </VTable>
+          </div>
         </div>
 
         <!-- Total Amount in Text -->

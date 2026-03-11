@@ -2,6 +2,11 @@ const emailRouteComponent = () => import('@/pages/apps/email/index.vue')
 
 // 👉 Redirects
 export const redirects = [
+  // หน้า calendar ปิดใช้ — นำการจองไปที่ตารางห้องว่าง (avaliable) ทั้งหมด
+  {
+    path: '/bookings/calendar',
+    redirect: '/bookings/avaliable',
+  },
   // ℹ️ We are redirecting to different pages based on role.
   // NOTE: Role is just for UI purposes. ACL is based on abilities.
   {

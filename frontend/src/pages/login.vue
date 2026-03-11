@@ -59,9 +59,9 @@ const login = async () => {
       localStorage.removeItem('savedPassword')
     }
 
-    // Redirect to bookings calendar or return URL
+    // Redirect to bookings avaliable (ตารางห้องว่าง) or return URL
     await nextTick(() => {
-      const redirectPath = route.query.to ? String(route.query.to) : '/bookings/calendar'
+      const redirectPath = route.query.to ? String(route.query.to) : '/bookings/avaliable'
       router.replace(redirectPath)
     })
   } catch (error) {
@@ -87,8 +87,8 @@ const onSubmit = () => {
 const loginWithMicrosoft = () => {
   oauthLoading.value = true
   const frontendUrl = window.location.origin
-  const redirectUri = route.query.to ? String(route.query.to) : '/bookings/calendar'
-  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+  const redirectUri = route.query.to ? String(route.query.to) : '/bookings/avaliable'
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
   
   // Redirect to backend OAuth endpoint
   window.location.href = `${apiBaseUrl}/auth/oauth/microsoft?redirectUri=${encodeURIComponent(redirectUri)}`
@@ -115,9 +115,9 @@ const loginWithLDAP = async () => {
       localStorage.removeItem('savedPassword')
     }
 
-    // Redirect to bookings calendar or return URL
+    // Redirect to bookings avaliable (ตารางห้องว่าง) or return URL
     await nextTick(() => {
-      const redirectPath = route.query.to ? String(route.query.to) : '/bookings/calendar'
+      const redirectPath = route.query.to ? String(route.query.to) : '/bookings/avaliable'
       router.replace(redirectPath)
     })
   } catch (error) {
@@ -130,7 +130,7 @@ const loginWithLDAP = async () => {
 </script>
 
 <template>
-  <div class="login-page d-flex align-center justify-end">
+  <div class="login-page d-flex align-center justify-center justify-md-end">
     <!-- Header Logo and Text -->
     <div class="login-header">
       <img
@@ -151,16 +151,16 @@ const loginWithLDAP = async () => {
     <VCard
       flat
       :max-width="500"
-      class="login-card me-12"
+      class="login-card me-md-12"
     >
-      <VCardText class="text-center pa-8 pb-4">
+      <VCardText class="text-center pa-8 pb-4 flex-grow-0">
         <img
           :src="rmutiLogoImage"
           alt="RMUTI Logo"
           class="auth-card-logo"
         />
       </VCardText>
-      <VCardText class="pa-8 pt-4">
+      <VCardText class="pa-8 pt-4 flex-grow-1">
         <VForm
           ref="refVForm"
           @submit.prevent="onSubmit"
@@ -346,12 +346,14 @@ const loginWithLDAP = async () => {
   width: 100%;
   height: auto;
   object-fit: contain;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .login-card {
   border-radius: 12px !important;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08) !important;
-  min-height: 780px !important;
   height: auto !important;
   width: 100%;
   max-width: 500px;
@@ -369,8 +371,6 @@ const loginWithLDAP = async () => {
 /* Prevent layout shift from error messages - Reserve space always */
 .login-card :deep(.v-input__details) {
   min-height: 28px !important;
-  height: 28px !important;
-  max-height: 28px !important;
   display: block !important;
   visibility: visible !important;
   opacity: 1 !important;
@@ -395,7 +395,6 @@ const loginWithLDAP = async () => {
 .login-card :deep(.v-input__details:empty),
 .login-card :deep(.v-input__details:not(:has(.v-messages__message))) {
   min-height: 28px !important;
-  height: 28px !important;
   display: block !important;
   visibility: visible !important;
   opacity: 1 !important;
@@ -410,14 +409,10 @@ const loginWithLDAP = async () => {
   visibility: visible !important;
   opacity: 1 !important;
   min-height: 28px !important;
-  height: 28px !important;
-  max-height: 28px !important;
 }
 
 .login-card :deep(.v-messages) {
   min-height: 22px !important;
-  height: 22px !important;
-  max-height: 22px !important;
   display: block !important;
   line-height: 22px !important;
   margin: 0 !important;
@@ -442,7 +437,6 @@ const loginWithLDAP = async () => {
 /* Force display even when empty */
 .login-card :deep(.v-messages:empty) {
   min-height: 22px !important;
-  height: 22px !important;
   display: block !important;
   visibility: visible !important;
   opacity: 1 !important;
@@ -457,8 +451,6 @@ const loginWithLDAP = async () => {
   visibility: visible !important;
   opacity: 1 !important;
   min-height: 22px !important;
-  height: 22px !important;
-  max-height: 22px !important;
 }
 
 .login-card :deep(.v-messages__message) {
@@ -471,7 +463,6 @@ const loginWithLDAP = async () => {
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   white-space: nowrap !important;
-  height: 22px !important;
 }
 
 .login-card :deep(.v-text-field) {
@@ -493,32 +484,26 @@ const loginWithLDAP = async () => {
 .login-card :deep(.app-text-field) {
   margin-bottom: 0 !important;
   padding-bottom: 0 !important;
-  min-height: 92px !important;
-  height: 92px !important;
-  max-height: 92px !important;
+  min-height: auto !important;
   display: flex !important;
   flex-direction: column !important;
   box-sizing: border-box !important;
   flex-shrink: 0 !important;
 }
 
-/* Ensure input wrapper has fixed height */
+/* Ensure input wrapper has flexible height */
 .login-card :deep(.v-input) {
   margin-bottom: 0 !important;
-  min-height: 92px !important;
-  height: 92px !important;
-  max-height: 92px !important;
+  min-height: auto !important;
   display: flex !important;
   flex-direction: column !important;
   box-sizing: border-box !important;
   flex-shrink: 0 !important;
 }
 
-/* Ensure input control has fixed height */
+/* Ensure input control has minimum height */
 .login-card :deep(.v-input__control) {
   min-height: 64px !important;
-  height: 64px !important;
-  max-height: 64px !important;
   box-sizing: border-box !important;
   flex-shrink: 0 !important;
 }
@@ -542,24 +527,102 @@ const loginWithLDAP = async () => {
   padding-bottom: 32px !important;
 }
 
+/* ===== Tablet (≤960px) ===== */
+@media (max-width: 960px) {
+  .login-page {
+    justify-content: center !important;
+    padding: 1rem;
+  }
+
+  .login-card {
+    margin-inline-end: 0 !important;
+    min-height: auto !important;
+  }
+
+  .login-header {
+    position: relative;
+    top: auto;
+    left: auto;
+    margin-bottom: 1.5rem;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    width: 100%;
+  }
+
+  .header-text-thai {
+    font-size: 1.125rem;
+  }
+
+  .header-text-english {
+    font-size: 0.9375rem;
+  }
+
+  .login-page {
+    flex-direction: column;
+  }
+}
+
+/* ===== Mobile (≤768px) ===== */
 @media (max-width: 768px) {
   .login-header {
-    top: 1rem;
-    left: 1rem;
+    top: auto;
+    left: auto;
+    position: relative;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
+    text-align: center;
+    gap: 0.5rem;
   }
-  
+
   .header-logo {
-    height: 70px;
+    height: 60px;
   }
-  
+
   .header-text-thai {
-    font-size: 18px;
+    font-size: 1rem;
   }
-  
+
   .header-text-english {
-    font-size: 15px;
+    font-size: 0.875rem;
+  }
+
+  .login-card {
+    max-width: 100% !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    border-radius: 12px !important;
+  }
+
+  .auth-card-logo {
+    max-width: 160px;
+  }
+}
+
+/* ===== Small Mobile (≤480px) ===== */
+@media (max-width: 480px) {
+  .login-page {
+    padding: 0.5rem;
+  }
+
+  .header-logo {
+    height: 50px;
+  }
+
+  .header-text-thai {
+    font-size: 0.875rem;
+  }
+
+  .header-text-english {
+    font-size: 0.75rem;
+  }
+
+  .login-card .v-card-text.pa-8 {
+    padding: 16px !important;
+  }
+
+  .auth-card-logo {
+    max-width: 130px;
   }
 }
 </style>

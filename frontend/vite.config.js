@@ -14,6 +14,8 @@ import svgLoader from 'vite-svg-loader'
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  // ใช้ cacheDir ที่อื่นเพื่อหลีกเลี่ยงปัญหา EPERM ใน node_modules
+  cacheDir: './.vite',
   plugins: [
     // Docs: https://github.com/posva/unplugin-vue-router
     // ℹ️ This plugin should be placed before vue plugin
@@ -111,6 +113,14 @@ export default defineConfig({
   },
   build: {
     chunkSizeWarningLimit: 5000,
+    rollupOptions: {
+      output: {
+        // ใช้เฉพาะ hash เพื่อหลีกเลี่ยงชื่อไฟล์ที่มีอักษรไทย/อักขระพิเศษ → ERR_HTTP2_PROTOCOL_ERROR บน IIS
+        assetFileNames: 'assets/[hash][extname]',
+        chunkFileNames: 'assets/[hash].js',
+        entryFileNames: 'assets/[name]-[hash].js',
+      },
+    },
   },
   optimizeDeps: {
     entries: [
@@ -120,17 +130,28 @@ export default defineConfig({
       'vue',
       'vue-router',
       'pinia',
-      'vuetify',
     ],
+    // ไม่ pre-bundle vuetify — ให้ vite-plugin-vuetify จัดการ virtual SASS (VRipple.sass ฯลฯ)
+    exclude: ['vuetify'],
   },
   server: {
-    port: 8080,
+    port: 8080,   
     host: true,
     hmr: {
       overlay: true,
     },
     fs: {
       strict: false,
+    },
+    proxy: {
+      '/api': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+      },
+      '/uploads': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+      },
     },
   },
 })

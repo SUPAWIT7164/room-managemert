@@ -445,8 +445,7 @@ onMounted(() => {
           <div class="text-center mb-6">
             <div
               v-if="imageLoading"
-              class="d-flex justify-center align-center"
-              style="width: 200px; height: 200px; margin: 0 auto;"
+              class="d-flex justify-center align-center face-image-box"
             >
               <VProgressCircular
                 indeterminate
@@ -457,13 +456,14 @@ onMounted(() => {
               v-else-if="faceImage"
               :src="faceImage"
               alt="Face Image"
-              style="width: 200px; height: 200px; object-fit: cover; margin: 0 auto; border-radius: 8px;"
+              class="face-image-box"
+              style="object-fit: cover; border-radius: 8px;"
               @error="faceImage = null"
             />
             <div
               v-else
-              class="d-flex justify-center align-center text-medium-emphasis"
-              style="width: 200px; height: 200px; margin: 0 auto; border: 2px dashed; border-radius: 8px;"
+              class="d-flex justify-center align-center text-medium-emphasis face-image-box"
+              style="border: 2px dashed; border-radius: 8px;"
             >
               ไม่พบรูปภาพ
             </div>
@@ -633,4 +633,19 @@ onMounted(() => {
     </VDialog>
   </div>
 </template>
+
+<style scoped>
+.face-image-box {
+  width: 12.5rem;
+  height: 12.5rem;
+  margin: 0 auto;
+}
+
+@media (max-width: 599.98px) {
+  .face-image-box {
+    width: 10rem;
+    height: 10rem;
+  }
+}
+</style>
 

@@ -360,7 +360,7 @@ const getStatus = (booking) => {
 // Check if user can approve
 const canApprove = (booking) => {
   if (authStore.isSuperAdmin || authStore.isAdmin) return true
-  const roomId = booking.room_id || booking.room
+  const roomId = booking.room || booking.room_id
   if (roomId && authorizedRooms.value.includes(Number(roomId))) return true
   return false
 }
@@ -368,9 +368,13 @@ const canApprove = (booking) => {
 // Check if user can cancel
 const canCancel = (booking) => {
   if (authStore.isSuperAdmin || authStore.isAdmin) return true
-  const bookerId = booking.booker_id || booking.user_id
+  const bookerId = booking.booker || booking.booker_id || booking.user_id
   const status = booking.status
-  if (bookerId === authStore.user?.id && (status === 1 || status === 'approved' || status === 'confirmed')) return true
+  // Can cancel if: approved (status = 1) and not cancelled/rejected
+  const isApproved = status === 1 || status === 'approved' || status === 'confirmed'
+  const isCancelled = booking.cancel === 1 || booking.cancel === true
+  const isRejected = booking.reject === 1 || booking.reject === true
+  if (bookerId === authStore.user?.id && isApproved && !isCancelled && !isRejected) return true
   return false
 }
 
@@ -385,31 +389,122 @@ const isPastBooking = (endDateString) => {
 const getActions = (booking) => {
   const actions = []
   const status = getStatus(booking)
-  const isPast = isPastBooking(booking.end_datetime || booking.end)
+  const isPast = isPastBooking(booking.end_datetime || booking.end || booking.end_time)
+
+  // Debug logging for super-admin
+  if (authStore.isSuperAdmin || authStore.isAdmin) {
+    console.log('[BookingsList] Admin/SuperAdmin checking booking:', {
+      bookingId: booking.id,
+      status: booking.status,
+      statusType: typeof booking.status,
+      cancel: booking.cancel,
+      reject: booking.reject,
+      isPast,
+      endDate: booking.end_datetime || booking.end || booking.end_time,
+      isSuperAdmin: authStore.isSuperAdmin,
+      isAdmin: authStore.isAdmin,
+      userRole: authStore.user?.role
+    })
+  }
 
   // If canceled or rejected, show status only
   if (booking.cancel === 1 || booking.cancel === true || booking.reject === 1 || booking.reject === true) {
+    if (authStore.isSuperAdmin || authStore.isAdmin) {
+      console.log('[BookingsList] Booking is cancelled or rejected, no actions')
+    }
     return []
   }
 
   // If past booking, no actions
   if (isPast) {
+    if (authStore.isSuperAdmin || authStore.isAdmin) {
+      console.log('[BookingsList] Booking is past, no actions')
+    }
     return []
   }
 
   // Approve button (for approvers) - only show if status is pending
   const bookingStatus = booking.status
-  const isPending = bookingStatus === 0 || bookingStatus === 'pending' || bookingStatus === '0'
-  if (canApprove(booking) && isPending) {
+  // Pending = status is null, 0, 'pending', '0', or undefined, and not cancelled/rejected
+  // Also check if status is not approved (status !== 1 and status !== 'approved')
+  const isPending = (
+    bookingStatus === null || 
+    bookingStatus === undefined || 
+    bookingStatus === 0 || 
+    bookingStatus === 'pending' || 
+    bookingStatus === '0' ||
+    bookingStatus === false ||
+    (typeof bookingStatus === 'string' && bookingStatus.toLowerCase() === 'pending')
+  )
+  
+  // Check if approved: status === 1, 'approved', 'confirmed', or true
+  const isApproved = (
+    bookingStatus === 1 || 
+    bookingStatus === 'approved' || 
+    bookingStatus === 'confirmed' || 
+    bookingStatus === true ||
+    bookingStatus === '1'
+  )
+  
+  // Also check if status is not approved (for super-admin, allow approving even if status is not explicitly pending)
+  const isNotApproved = !isApproved
+  
+  // Debug logging
+  const canApproveResult = canApprove(booking)
+  console.log('[BookingsList] Action check for booking:', {
+    bookingId: booking.id,
+    canApprove: canApproveResult,
+    isPending,
+    isApproved,
+    isNotApproved,
+    bookingStatus,
+    statusType: typeof bookingStatus,
+    statusValue: bookingStatus,
+    isSuperAdmin: authStore.isSuperAdmin,
+    isAdmin: authStore.isAdmin,
+    userRole: authStore.user?.role,
+    user: authStore.user,
+    authorizedRooms: authorizedRooms.value,
+    roomId: booking.room || booking.room_id,
+    cancel: booking.cancel,
+    reject: booking.reject
+  })
+  
+  // For super-admin and admin, show approve button if not approved and not cancelled/rejected
+  // For regular approvers, only show if pending
+  // IMPORTANT: Don't show approve/reject buttons if already approved
+  const shouldShowApprove = canApproveResult && !isApproved && (
+    (authStore.isSuperAdmin || authStore.isAdmin) ? isNotApproved : isPending
+  )
+  
+  if (shouldShowApprove) {
     actions.push({
       label: 'อนุมัติ',
       color: 'success',
       action: 'approve',
       icon: 'tabler-check'
     })
+  } else if (canApproveResult && !shouldShowApprove) {
+    console.log('[BookingsList] Can approve but should not show:', {
+      bookingId: booking.id,
+      bookingStatus,
+      isPending,
+      isApproved,
+      isNotApproved,
+      isSuperAdmin: authStore.isSuperAdmin,
+      isAdmin: authStore.isAdmin
+    })
+  } else if (!canApproveResult) {
+    console.log('[BookingsList] Cannot approve:', {
+      bookingId: booking.id,
+      isSuperAdmin: authStore.isSuperAdmin,
+      isAdmin: authStore.isAdmin,
+      userRole: authStore.user?.role,
+      user: authStore.user
+    })
   }
 
-  // Cancel button (for booker)
+  // Cancel button (for booker) - show if not cancelled/rejected and not past
   if (canCancel(booking)) {
     actions.push({
       label: 'ยกเลิก',
@@ -419,8 +514,15 @@ const getActions = (booking) => {
     })
   }
 
-  // Reject button (for approvers) - only show if status is pending
-  if (canApprove(booking) && isPending) {
+  // Reject button (for approvers) - only show if status is pending and not approved
+  // For super-admin and admin, show reject if not approved
+  // For regular approvers, only show if pending
+  // IMPORTANT: Don't show reject button if already approved
+  const shouldShowReject = canApproveResult && !isApproved && (
+    (authStore.isSuperAdmin || authStore.isAdmin) ? isNotApproved : isPending
+  )
+  
+  if (shouldShowReject) {
     actions.push({
       label: 'ปฏิเสธ',
       color: 'error',
@@ -672,12 +774,39 @@ onBeforeUnmount(() => {
   letter-spacing: 0.025em;
 }
 
-/* Responsive */
+/* ===== Responsive ===== */
 @media (max-width: 1200px) {
   .v-table thead th,
   .v-table tbody td {
     padding: 10px 8px !important;
     font-size: 0.8125rem;
+  }
+}
+
+@media (max-width: 599.98px) {
+  .v-table thead th,
+  .v-table tbody td {
+    padding: 8px 6px !important;
+    font-size: 0.75rem;
+  }
+
+  .v-table tbody td:first-child {
+    min-width: 40px;
+  }
+
+  .v-table tbody td:nth-child(2) {
+    min-width: 80px;
+  }
+
+  .v-table tbody td:nth-child(3),
+  .v-table tbody td:nth-child(6) {
+    min-width: 100px;
+  }
+
+  .v-table tbody td:nth-child(7),
+  .v-table tbody td:nth-child(8),
+  .v-table tbody td:nth-child(12) {
+    min-width: 100px;
   }
 }
 
@@ -992,28 +1121,26 @@ onBeforeUnmount(() => {
                   >
                     <td>{{ booking.id }}</td>
                     <td>
-                      <div class="d-flex gap-2">
+                      <div class="d-flex gap-2 flex-wrap">
                         <VBtn
                           v-for="action in getActions(booking)"
                           :key="action.action"
                           :color="action.color"
                           size="small"
-                          variant="text"
-                          :icon="action.icon"
+                          variant="tonal"
+                          :prepend-icon="action.icon"
                           @click="handleAction(booking, action.action)"
                         >
-                          <VIcon
-                            :icon="action.icon"
-                            size="16"
-                          />
+                          {{ action.label }}
                         </VBtn>
                         <span
                           v-if="getActions(booking).length === 0"
-                          class="text-disabled text-caption"
+                          class="text-disabled text-caption d-flex align-center"
                         >
-                          {{ isPastBooking(booking.end_datetime || booking.end) ? 'หมดเวลาแล้ว' : 
+                          {{ isPastBooking(booking.end_datetime || booking.end || booking.end_time) ? 'หมดเวลาแล้ว' : 
                              (booking.cancel === 1 || booking.cancel === true) ? 'ยกเลิกแล้ว' :
-                             (booking.reject === 1 || booking.reject === true) ? 'ถูกปฏิเสธ' : 'ไม่มีสิทธิ์' }}
+                             (booking.reject === 1 || booking.reject === true) ? 'ถูกปฏิเสธ' : 
+                             (booking.status === 1 || booking.status === 'approved') ? 'อนุมัติแล้ว' : 'ไม่มีสิทธิ์' }}
                         </span>
                       </div>
                     </td>

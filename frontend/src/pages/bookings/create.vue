@@ -38,7 +38,7 @@ const submit = async () => {
   loading.value = true
   try {
     await api.post('/bookings', form.value)
-    router.push({ name: 'bookings-calendar' })
+    router.push({ name: 'bookings-avaliable' })
   } catch (error) {
     console.error('Error creating booking:', error)
   } finally {

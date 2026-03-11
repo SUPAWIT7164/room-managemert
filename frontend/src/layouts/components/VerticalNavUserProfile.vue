@@ -1,10 +1,11 @@
 <script setup>
-import { computed, ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref, onMounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/utils/api'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 // Get user data from auth store
@@ -19,6 +20,8 @@ const loadFaceImage = async () => {
     const response = await api.get('/face')
     if (response.data.success && response.data.data?.image) {
       faceImage.value = response.data.data.image
+    } else {
+      faceImage.value = null
     }
   } catch (error) {
     // Silently fail if face image doesn't exist
@@ -31,6 +34,23 @@ const loadFaceImage = async () => {
 onMounted(() => {
   if (authStore.isAuthenticated) {
     loadFaceImage()
+  }
+})
+
+// Watch for route changes to reload face image (e.g., after face registration)
+watch(() => route.path, (newPath) => {
+  // Reload face image when navigating away from face registration page
+  if (newPath !== '/face/register' && authStore.isAuthenticated) {
+    loadFaceImage()
+  }
+})
+
+// Watch for authentication changes
+watch(() => authStore.isAuthenticated, (isAuthenticated) => {
+  if (isAuthenticated) {
+    loadFaceImage()
+  } else {
+    faceImage.value = null
   }
 })
 

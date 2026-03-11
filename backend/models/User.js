@@ -1,6 +1,9 @@
 const { pool } = require('../config/database');
 const bcrypt = require('bcrypt');
 
+// Declare DB_CONNECTION once at module level - use throughout the file
+const DB_CONNECTION = (process.env.DB_CONNECTION || '').toLowerCase();
+
 class User {
     static async findAll(options = {}) {
         let query = `SELECT u.id, u.name, u.email, u.phone, u.department, u.position, u.employee_id, 
@@ -32,7 +35,8 @@ class User {
             query += ' WHERE ' + conditions.join(' AND ');
         }
 
-        query += ' GROUP BY u.id';
+        // SQL Server requires GROUP BY all non-aggregate columns
+        query += ' GROUP BY u.id, u.name, u.email, u.phone, u.department, u.position, u.employee_id, u.photo, u.is_active, u.last_login_at, u.created_at, r.name';
         query += ' ORDER BY u.created_at DESC';
 
         if (options.limit) {
@@ -45,7 +49,10 @@ class User {
             params.push(parseInt(options.offset));
         }
 
+        console.log('[User.findAll] Query:', query);
+        console.log('[User.findAll] Params:', params);
         const [rows] = await pool.query(query, params);
+        console.log('[User.findAll] Returned rows:', rows.length);
         return rows;
     }
 

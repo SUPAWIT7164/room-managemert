@@ -97,6 +97,8 @@ class FaceController {
                 });
             }
 
+            console.log(`[FaceController] Storing face for user ${userId}, image length: ${image ? image.length : 0}`);
+
             const username = user?.username || user?.email?.split('@')[0];
 
             // Store in face scanner device (like room-management-portal)
@@ -105,49 +107,93 @@ class FaceController {
                 try {
                     const scannerService = new FaceScannerService();
                     scannerResult = await scannerService.registerFace(username, image);
+                    console.log(`[FaceController] Face stored in scanner successfully for ${username}`);
                 } catch (scannerError) {
-                    console.error('Error storing face in scanner:', scannerError);
+                    console.error('[FaceController] Error storing face in scanner:', scannerError.message);
                     // Continue to save in database even if scanner fails
                 }
             }
 
             // Remove data URL prefix if present for database storage
             const cleanedString = image.replace(/^data:image\/[a-z]+;base64,/, '');
+            console.log(`[FaceController] Cleaned image string length: ${cleanedString.length}`);
             
             // Check if face already exists in database
-            const existingFace = await Face.findByUserId(userId);
+            let existingFace;
+            try {
+                existingFace = await Face.findByUserId(userId);
+                console.log(`[FaceController] Existing face found: ${existingFace ? 'yes' : 'no'}`);
+            } catch (findError) {
+                console.error('[FaceController] Error finding existing face:', findError.message);
+                throw new Error(`ไม่สามารถตรวจสอบข้อมูลใบหน้าเดิม: ${findError.message}`);
+            }
             
             let face;
-            if (existingFace) {
-                // Update existing face
-                face = await Face.update(userId, null, cleanedString);
-            } else {
-                // Create new face
-                face = await Face.create(userId, null, cleanedString);
+            try {
+                if (existingFace) {
+                    // Update existing face
+                    console.log(`[FaceController] Updating existing face for user ${userId}`);
+                    face = await Face.update(userId, null, cleanedString);
+                    console.log(`[FaceController] Face updated successfully`);
+                } else {
+                    // Create new face
+                    console.log(`[FaceController] Creating new face for user ${userId}`);
+                    face = await Face.create(userId, null, cleanedString);
+                    console.log(`[FaceController] Face created successfully with ID: ${face?.id}`);
+                }
+            } catch (faceError) {
+                console.error('[FaceController] Error saving face to database:', faceError);
+                console.error('[FaceController] Error stack:', faceError.stack);
+                throw new Error(`ไม่สามารถบันทึกภาพใบหน้าในฐานข้อมูล: ${faceError.message}`);
             }
 
             // Update user photo with face image
             try {
                 // Check if photo column can store long text, if not, try to alter it
-                const { pool } = require('../config/database');
-                const [columns] = await pool.query(`
-                    SELECT COLUMN_TYPE 
-                    FROM INFORMATION_SCHEMA.COLUMNS 
-                    WHERE TABLE_SCHEMA = DATABASE() 
-                    AND TABLE_NAME = 'users' 
-                    AND COLUMN_NAME = 'photo'
-                `);
+                const { pool, DB_TYPE } = require('../config/database');
                 
-                const columnType = columns[0]?.COLUMN_TYPE || '';
-                // If photo is varchar(255), try to change it to TEXT
-                if (columnType.includes('varchar(255)')) {
-                    try {
-                        await pool.query(`
-                            ALTER TABLE users 
-                            MODIFY COLUMN photo TEXT NULL
-                        `);
-                    } catch (alterError) {
-                        console.log('Note: Could not alter photo column:', alterError.message);
+                let query;
+                if (DB_TYPE === 'mssql' || DB_TYPE === 'sqlserver') {
+                    query = `
+                        SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+                        FROM INFORMATION_SCHEMA.COLUMNS 
+                        WHERE TABLE_SCHEMA = DB_NAME() 
+                        AND TABLE_NAME = 'users' 
+                        AND COLUMN_NAME = 'photo'
+                    `;
+                } else {
+                    query = `
+                        SELECT COLUMN_TYPE 
+                        FROM INFORMATION_SCHEMA.COLUMNS 
+                        WHERE TABLE_SCHEMA = DATABASE() 
+                        AND TABLE_NAME = 'users' 
+                        AND COLUMN_NAME = 'photo'
+                    `;
+                }
+                
+                const [columns] = await pool.query(query);
+                
+                if (columns.length > 0) {
+                    const columnInfo = columns[0];
+                    let needsAlter = false;
+                    let alterQuery;
+                    
+                    if (DB_TYPE === 'mssql' || DB_TYPE === 'sqlserver') {
+                        // SQL Server: Check if it's NVARCHAR with small size
+                        const dataType = columnInfo.DATA_TYPE || '';
+                        const maxLength = columnInfo.CHARACTER_MAXIMUM_LENGTH;
+                        if (dataType === 'nvarchar' && maxLength && maxLength < 1000) {
+                            needsAlter = true;
+                            alterQuery = `ALTER TABLE users ALTER COLUMN photo NVARCHAR(MAX) NULL`;
+                        }
+                    }
+                    
+                    if (needsAlter && alterQuery) {
+                        try {
+                            await pool.query(alterQuery);
+                        } catch (alterError) {
+                            console.log('Note: Could not alter photo column:', alterError.message);
+                        }
                     }
                 }
                 
@@ -172,11 +218,24 @@ class FaceController {
                 }
             });
         } catch (error) {
-            console.error('Error storing face:', error);
+            console.error('[FaceController] Error storing face:', error);
+            console.error('[FaceController] Error stack:', error.stack);
+            console.error('[FaceController] Error details:', {
+                message: error.message,
+                code: error.code,
+                number: error.number,
+                state: error.state
+            });
+            
+            // Return more detailed error in development
+            const errorMessage = process.env.NODE_ENV === 'development' 
+                ? `เกิดข้อผิดพลาดในการบันทึกภาพใบหน้า: ${error.message}`
+                : 'เกิดข้อผิดพลาดในการบันทึกภาพใบหน้า';
+            
             res.status(500).json({
                 success: false,
-                message: 'เกิดข้อผิดพลาดในการบันทึกภาพใบหน้า',
-                error: error.message
+                message: errorMessage,
+                error: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }
     }

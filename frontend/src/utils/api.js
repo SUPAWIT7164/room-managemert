@@ -2,8 +2,8 @@ import axios from 'axios'
 import { useAuthStore } from '@/stores/auth' // Import Pinia store
 import { router } from '@/plugins/1.router' // Import the router instance
 
-// Set base URL - Backend runs on port 5000 with /api prefix
-axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+// Set base URL - use relative '/api' so Vite proxy handles it in dev, and works behind IIS in prod
+axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 // Request interceptor
 axios.interceptors.request.use(
@@ -37,9 +37,11 @@ axios.interceptors.response.use(
         router.push('/login') // Redirect to login
       }
 
-      // Handle other errors
-      const message = error.response.data?.message || 'เกิดข้อผิดพลาด'
-      console.error('API Error:', message)
+      // Handle other errors (ไม่ log 502/503 เพื่อลด noise เมื่อกล้องหรือ service ไม่พร้อม)
+      if (error.response.status !== 502 && error.response.status !== 503) {
+        const message = error.response.data?.message || 'เกิดข้อผิดพลาด'
+        console.error('API Error:', message)
+      }
     } else if (error.request) {
       // Request was made but no response received
       console.error('Network Error:', error.message)

@@ -330,6 +330,29 @@ const config = {
 
 ---
 
+## ⚠️ ถ้านับคนได้ 0 เสมอ (People count = 0)
+
+ฟีเจอร์นับคนในหน้า CCTV (`/api/cctv/count-people`) ใช้ `@vladmandic/human` และ `@tensorflow/tfjs-node` ในโค้ดถ้า `require` ไม่ได้จะ **return 0** (ไม่ crash)
+
+**สาเหตุที่เป็นไปได้:**
+
+1. **เซิร์ฟเวอร์ต่อกล้องไม่ได้**  
+   - เช่น 502 Bad Gateway จาก proxy/กล้อง  
+   - API จะตอบ `502` พร้อม `count: 0` และข้อความ "ไม่สามารถดึงภาพจากกล้องได้"
+
+2. **บน backend ยังไม่ได้ติดตั้ง AI packages**  
+   - โค้ดใช้ `optionalDependencies`: `@vladmandic/human`, `@tensorflow/tfjs-node`  
+   - ถ้าไม่ติดตั้งหรือติดตั้งไม่สำเร็จ (เช่น build native ล้มบนเซิร์ฟเวอร์) ฟังก์ชันนับคนจะ return 0  
+   - ใน log จะเห็นคำเตือนครั้งเดียว:  
+     `[ImageProcessing] countPeople: ไม่พบ @vladmandic/human หรือ @tensorflow/tfjs-node — ติดตั้งเพื่อนับคนจริง. ตอนนี้ return 0.`
+
+**ถ้าแก้ไขแล้ว (ติดตั้ง packages / แก้ต่อกล้อง) ให้ build ใหม่:**
+
+- Backend: ในโฟลเดอร์ `backend` รัน `npm install` (หรือ `npm install @vladmandic/human @tensorflow/tfjs-node` ถ้าต้องการบังคับติดตั้ง) แล้ว restart service  
+- หมายเหตุ: ตอนนี้ backend นับคนทั้งภาพ (จาก snapshot) ยังไม่ได้ crop ตาม polygon ที่วาด ดังนั้นทุกพื้นที่วาดจะได้เลขนับคนเท่ากัน (นับทั้งภาพ)
+
+---
+
 ## 🎓 สรุป
 
 **Image Processing Service** ทำงานแบบ:
