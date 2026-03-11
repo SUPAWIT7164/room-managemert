@@ -65,7 +65,14 @@ const login = async () => {
       router.replace(redirectPath)
     })
   } catch (error) {
-    const message = error.response?.data?.message || 'เข้าสู่ระบบไม่สำเร็จ กรุณาตรวจสอบชื่อผู้ใช้และรหัสผ่าน'
+    const data = error.response?.data
+    let message = (data && typeof data.message === 'string') ? data.message : error.message
+    if (!message || message === 'Request failed with status code 401') {
+      message = 'เข้าสู่ระบบไม่สำเร็จ กรุณาตรวจสอบชื่อผู้ใช้และรหัสผ่าน'
+    }
+    if (error.response?.status === 503) {
+      message = data?.message || 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณาลองใหม่ภายหลัง'
+    }
     errors.value.password = message
   } finally {
     loading.value = false

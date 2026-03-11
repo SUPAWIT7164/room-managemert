@@ -93,6 +93,8 @@ app.use('/processed-images', express.static(path.join(__dirname, 'storage/proces
 
 // --- Minimal health/ping BEFORE loading routes ---
 // So that even if a route module fails to load, these return 200 and server can start under IIS.
+app.get('/', (req, res) => res.status(200).json({ status: 'OK', message: 'Room Management API is running', timestamp: new Date().toISOString() }));
+app.get('/api', (req, res) => res.status(200).json({ status: 'OK', message: 'Room Management API is running', timestamp: new Date().toISOString() }));
 app.get('/api/ping', (req, res) => res.status(200).json({ status: 'OK', message: 'pong' }));
 app.get('/ping', (req, res) => res.status(200).json({ status: 'OK', message: 'pong' }));
 app.get('/api/health', (req, res) => {

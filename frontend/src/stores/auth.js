@@ -34,11 +34,20 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const { rememberMe, ...loginCredentials } = credentials
       const response = await api.post('/auth/login', loginCredentials)
-      const { token: newToken, user: userData } = response.data.data
-      
+
+      const data = response?.data
+      const payload = data?.data
+      if (!payload || !payload.token) {
+        const msg = (data && typeof data.message === 'string') ? data.message : 'เซิร์ฟเวอร์ตอบกลับรูปแบบไม่ถูกต้อง'
+        const err = new Error(msg)
+        err.response = response
+        throw err
+      }
+
+      const { token: newToken, user: userData } = payload
       setAuth(newToken, userData, rememberMe)
-      
-      return response.data
+
+      return data
     } catch (error) {
       throw error
     }

@@ -14,7 +14,7 @@ export const useConfigStore = defineStore('config', () => {
       cookieColorScheme.value = val
   }, { immediate: true })
 
-  const theme = cookieRef('theme', themeConfig.app.theme)
+  const theme = cookieRef('theme', 'light')
 
   // 👉 isVerticalNavSemiDark
   const isVerticalNavSemiDark = cookieRef('isVerticalNavSemiDark', themeConfig.verticalNav.isVerticalNavSemiDark)
@@ -48,6 +48,11 @@ export const initConfigStore = () => {
   const vuetifyTheme = useTheme()
   const configStore = useConfigStore()
 
+  // ตั้ง default เป็น Light: ถ้าเคยใช้ system ให้ใช้ light แทน
+  if (configStore.theme === 'system') {
+    configStore.theme = 'light'
+  }
+
   watch([() => configStore.theme, userPreferredColorScheme], () => {
     const themetoUpdate = configStore.theme === 'system'
       ? userPreferredColorScheme.value === 'dark'
@@ -60,6 +65,8 @@ export const initConfigStore = () => {
   onMounted(() => {
     if (configStore.theme === 'system')
       vuetifyTheme.change(userPreferredColorScheme.value)
+    else
+      vuetifyTheme.change(configStore.theme)
   })
 }
 // !SECTION
