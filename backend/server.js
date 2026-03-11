@@ -138,6 +138,7 @@ const serviceUserRoutes = routeLoad('serviceUserRoutes', () => require('./routes
 const environmentRoutes = routeLoad('environmentRoutes', () => require('./routes/environmentRoutes'));
 const energyRoutes = routeLoad('energyRoutes', () => require('./routes/energyRoutes'));
 const snapshotRoutes = routeLoad('snapshotRoutes', () => require('./routes/snapshotRoutes'));
+const floorPlanRoutes = routeLoad('floorPlanRoutes', () => require('./routes/floorPlanRoutes'));
 
 // Use Routes (under /api for direct run and for proxies) — only mount if loaded
 if (authRoutes) app.use('/api/auth', authRoutes);
@@ -160,6 +161,7 @@ if (serviceUserRoutes) app.use('/api/service-users', serviceUserRoutes);
 if (environmentRoutes) app.use('/api/environment', environmentRoutes);
 if (energyRoutes) app.use('/api/energy', energyRoutes);
 if (snapshotRoutes) app.use('/api/snapshot', snapshotRoutes);
+if (floorPlanRoutes) app.use('/api/floor-plan', floorPlanRoutes);
 
 // When behind IIS Application "api", path is relative (e.g. /auth/login not /api/auth/login)
 if (authRoutes) app.use('/auth', authRoutes);
@@ -182,6 +184,7 @@ if (serviceUserRoutes) app.use('/service-users', serviceUserRoutes);
 if (environmentRoutes) app.use('/environment', environmentRoutes);
 if (energyRoutes) app.use('/energy', energyRoutes);
 if (snapshotRoutes) app.use('/snapshot', snapshotRoutes);
+if (floorPlanRoutes) app.use('/floor-plan', floorPlanRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

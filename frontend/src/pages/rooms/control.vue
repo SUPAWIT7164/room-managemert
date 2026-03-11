@@ -214,12 +214,11 @@ const availableFloors = computed(() => {
   }))
 })
 
-// Get available rooms for selected building and floor
+// Get available rooms for selected building, floor, and area
 const availableRooms = computed(() => {
   if (!selectedBuilding.value || !selectedFloor.value) return []
   
   try {
-    // Get areas for this building and floor (ใช้ Number() เพื่อให้เทียบกันได้ไม่ว่า API ส่ง string หรือ number)
     const buildingId = Number(selectedBuilding.value)
     const floorNumber = Number(selectedFloor.value)
     
@@ -230,16 +229,22 @@ const availableRooms = computed(() => {
     })
     
     if (currentFloorAreas.length === 0) return []
+
+    // ถ้ามี area ที่เลือกอยู่ → กรองเฉพาะห้องของ area นั้น
+    let targetAreas = currentFloorAreas
+    if (selectedArea.value) {
+      const areaName = _norm(selectedArea.value)
+      const matched = currentFloorAreas.filter(a => _norm(a.name) === areaName)
+      if (matched.length > 0) targetAreas = matched
+    }
     
-    // Get rooms in these areas
-    const areaIds = currentFloorAreas.map(a => Number(a.id))
-    const currentFloorRooms = rooms.value.filter(room => {
+    const areaIds = targetAreas.map(a => Number(a.id))
+    const filteredRooms = rooms.value.filter(room => {
       const rid = Number(room.area_id ?? room.areaId)
       return areaIds.includes(rid)
     })
     
-    return currentFloorRooms.map(room => {
-      // รองรับทั้ง name / Name (SQL Server/driver อาจส่ง key แบบ PascalCase)
+    return filteredRooms.map(room => {
       const rawName = room.name ?? room.Name
       const rawArea = room.area_name ?? room.Area_name
       const name = (rawName && String(rawName).trim()) || (rawArea && String(rawArea).trim()) || null
@@ -2981,19 +2986,15 @@ watch(() => route.query, async () => {
   if (showBuildingList.value) {
     await fetchBuildings()
   } else if (showRoomControl.value) {
-    // Load data from fetchBuildings (same as building list page) for dropdown
     await fetchBuildings()
     
-    // Load room data if room is specified in query (priority: query > current selection)
     const resolvedRoomId = resolveRoomIdFromQuery()
     if (resolvedRoomId) {
-      // รองรับ deep-link แบบ room เป็น "เลขห้อง/ชื่อห้อง" → map เป็น room.id
       if (selectedRoomId.value !== resolvedRoomId) {
         selectedRoomId.value = resolvedRoomId
         await nextTick()
       }
     } else if (selectedArea.value) {
-      // If area is selected but no room in query, select first room in area
       const targetArea = areas.value.find(a => {
         const areaBuildingId = String(a.building_id)
         const areaFloor = String(a.floor)
@@ -3003,13 +3004,12 @@ watch(() => route.query, async () => {
       })
       
       if (targetArea) {
-        const areaRooms = rooms.value.filter(room => room.area_id === targetArea.id)
+        const areaRooms = rooms.value.filter(room => Number(room.area_id) === Number(targetArea.id))
         if (areaRooms.length > 0) {
-          // Only auto-select first room if no room is currently selected
-          if (!selectedRoomId.value) {
+          const currentRoomInArea = areaRooms.find(r => Number(r.id) === Number(selectedRoomId.value))
+          if (!currentRoomInArea) {
             const firstRoomId = areaRooms[0].id
             selectedRoomId.value = firstRoomId
-            // Update URL with room
             router.replace({
               query: {
                 ...route.query,
@@ -3019,8 +3019,7 @@ watch(() => route.query, async () => {
             await nextTick()
           }
         }
-      } else if (!selectedRoomId.value) {
-        // Fallback (area not in DB yet): use mapping or best-effort selection
+      } else {
         const fallbackRoomId = resolveRoomIdFromAreaOnly()
         if (fallbackRoomId) {
           selectedRoomId.value = fallbackRoomId
@@ -3073,16 +3072,13 @@ onMounted(async () => {
   if (showBuildingList.value) {
     await fetchBuildings()
   } else if (showRoomControl.value) {
-    // Load data from fetchBuildings (same as building list page) for dropdown
     await fetchBuildings()
     
-    // Load room data if room is specified in query (priority: query > current selection)
     const resolvedRoomId = resolveRoomIdFromQuery()
     if (resolvedRoomId) {
       selectedRoomId.value = resolvedRoomId
       await nextTick()
     } else if (selectedArea.value) {
-      // If area is selected but no room in query, select first room in area
       const targetArea = areas.value.find(a => {
         const areaBuildingId = String(a.building_id)
         const areaFloor = String(a.floor)
@@ -3092,13 +3088,12 @@ onMounted(async () => {
       })
       
       if (targetArea) {
-        const areaRooms = rooms.value.filter(room => room.area_id === targetArea.id)
+        const areaRooms = rooms.value.filter(room => Number(room.area_id) === Number(targetArea.id))
         if (areaRooms.length > 0) {
-          // Only auto-select first room if no room is currently selected
-          if (!selectedRoomId.value) {
+          const currentRoomInArea = areaRooms.find(r => Number(r.id) === Number(selectedRoomId.value))
+          if (!currentRoomInArea) {
             const firstRoomId = areaRooms[0].id
             selectedRoomId.value = firstRoomId
-            // Update URL with room
             router.replace({
               query: {
                 ...route.query,
@@ -3108,7 +3103,7 @@ onMounted(async () => {
             await nextTick()
           }
         }
-      } else if (!selectedRoomId.value) {
+      } else {
         const fallbackRoomId = resolveRoomIdFromAreaOnly()
         if (fallbackRoomId) {
           selectedRoomId.value = fallbackRoomId
@@ -3117,15 +3112,12 @@ onMounted(async () => {
       }
     }
   } else if (showFloorPlan.value) {
-    // Load data from fetchBuildings (same as building list page) for dropdown
     await fetchBuildings()
     await loadFloorPlanAreas()
     await nextTick()
     console.log('Calling checkFloorDeviceStates from onMounted...')
     await checkFloorDeviceStates()
-    // Load device states for all rooms in floor plan
     await loadAllRoomDeviceStates()
-    // Start auto-refresh for room states
     startRoomStatesAutoRefresh()
   }
 })

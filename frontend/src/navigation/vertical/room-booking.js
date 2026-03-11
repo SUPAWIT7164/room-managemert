@@ -83,9 +83,14 @@ export default [
     title: 'สถานะปัจจุบัน',
     icon: { icon: 'tabler-users' },
     children: [
+      // ปิดใช้ — หน้า /reports/current-service-users
+      // {
+      //   title: 'ผู้ใช้เข้าใช้บริการปัจจุบัน',
+      //   to: 'reports-current-service-users',
+      // },
       {
-        title: 'ผู้ใช้เข้าใช้บริการปัจจุบัน',
-        to: 'reports-current-service-users',
+        title: 'Floor Plan',
+        to: 'floor-plan',
       },
     ],
   },
