@@ -1,295 +1,295 @@
 {
-  "hash": "3275f9cd",
-  "configHash": "746602d0",
+  "hash": "41a6c7b0",
+  "configHash": "337a0efd",
   "lockfileHash": "074bee1b",
-  "browserHash": "f7a5f847",
+  "browserHash": "8addfbc8",
   "optimized": {
     "vue": {
       "src": "../../node_modules/vue/dist/vue.runtime.esm-bundler.js",
       "file": "vue.js",
-      "fileHash": "1ef55b8b",
+      "fileHash": "e3a0c5aa",
       "needsInterop": false
     },
     "vue-router": {
       "src": "../../node_modules/vue-router/dist/vue-router.mjs",
       "file": "vue-router.js",
-      "fileHash": "8d046a67",
+      "fileHash": "413d9521",
       "needsInterop": false
     },
     "pinia": {
       "src": "../../node_modules/pinia/dist/pinia.mjs",
       "file": "pinia.js",
-      "fileHash": "1cb7048a",
+      "fileHash": "5f66da70",
       "needsInterop": false
     },
     "vue-router/auto": {
       "src": "../../node_modules/vue-router/dist/vue-router.mjs",
       "file": "vue-router_auto.js",
-      "fileHash": "51b800c3",
+      "fileHash": "3296717d",
       "needsInterop": false
     },
     "unplugin-vue-router/runtime": {
       "src": "../../node_modules/unplugin-vue-router/dist/runtime.mjs",
       "file": "unplugin-vue-router_runtime.js",
-      "fileHash": "2670715f",
+      "fileHash": "cf6c4b78",
       "needsInterop": false
     },
     "@vueuse/core": {
       "src": "../../node_modules/@vueuse/core/index.mjs",
       "file": "@vueuse_core.js",
-      "fileHash": "b8344210",
+      "fileHash": "de514218",
       "needsInterop": false
     },
     "@vueuse/math": {
       "src": "../../node_modules/@vueuse/math/index.mjs",
       "file": "@vueuse_math.js",
-      "fileHash": "cdd55686",
+      "fileHash": "1f8e4598",
       "needsInterop": false
     },
     "vue-i18n": {
       "src": "../../node_modules/vue-i18n/dist/vue-i18n.runtime.esm-bundler.js",
       "file": "vue-i18n.js",
-      "fileHash": "8df5b1f8",
+      "fileHash": "17927feb",
       "needsInterop": false
     },
     "@casl/vue": {
       "src": "../../node_modules/@casl/vue/dist/es6m/index.mjs",
       "file": "@casl_vue.js",
-      "fileHash": "c974fe6e",
+      "fileHash": "b6a85abd",
       "needsInterop": false
     },
     "@floating-ui/dom": {
       "src": "../../node_modules/@floating-ui/dom/dist/floating-ui.dom.mjs",
       "file": "@floating-ui_dom.js",
-      "fileHash": "08a75e81",
+      "fileHash": "7d9ce306",
       "needsInterop": false
     },
     "@formkit/drag-and-drop": {
       "src": "../../node_modules/@formkit/drag-and-drop/index.mjs",
       "file": "@formkit_drag-and-drop.js",
-      "fileHash": "db34d57d",
+      "fileHash": "a99e10e6",
       "needsInterop": false
     },
     "@formkit/drag-and-drop/vue": {
       "src": "../../node_modules/@formkit/drag-and-drop/vue/index.mjs",
       "file": "@formkit_drag-and-drop_vue.js",
-      "fileHash": "fbfc0b22",
+      "fileHash": "360de7ac",
       "needsInterop": false
     },
     "@fullcalendar/daygrid": {
       "src": "../../node_modules/@fullcalendar/daygrid/index.js",
       "file": "@fullcalendar_daygrid.js",
-      "fileHash": "aef8ed80",
+      "fileHash": "99c12d7c",
       "needsInterop": false
     },
     "@fullcalendar/interaction": {
       "src": "../../node_modules/@fullcalendar/interaction/index.js",
       "file": "@fullcalendar_interaction.js",
-      "fileHash": "f38454e9",
+      "fileHash": "6e60dec0",
       "needsInterop": false
     },
     "@fullcalendar/list": {
       "src": "../../node_modules/@fullcalendar/list/index.js",
       "file": "@fullcalendar_list.js",
-      "fileHash": "78026dff",
+      "fileHash": "84ab7c38",
       "needsInterop": false
     },
     "@fullcalendar/timegrid": {
       "src": "../../node_modules/@fullcalendar/timegrid/index.js",
       "file": "@fullcalendar_timegrid.js",
-      "fileHash": "e06e8517",
+      "fileHash": "fa1239c8",
       "needsInterop": false
     },
     "@fullcalendar/vue3": {
       "src": "../../node_modules/@fullcalendar/vue3/dist/index.js",
       "file": "@fullcalendar_vue3.js",
-      "fileHash": "faa971a1",
+      "fileHash": "7d6220d0",
       "needsInterop": false
     },
     "@tiptap/extension-image": {
       "src": "../../node_modules/@tiptap/extension-image/dist/index.js",
       "file": "@tiptap_extension-image.js",
-      "fileHash": "184c625f",
+      "fileHash": "5471037e",
       "needsInterop": false
     },
     "@tiptap/extension-link": {
       "src": "../../node_modules/@tiptap/extension-link/dist/index.js",
       "file": "@tiptap_extension-link.js",
-      "fileHash": "ea27b9b4",
+      "fileHash": "bfe5283d",
       "needsInterop": false
     },
     "@tiptap/extension-placeholder": {
       "src": "../../node_modules/@tiptap/extension-placeholder/dist/index.js",
       "file": "@tiptap_extension-placeholder.js",
-      "fileHash": "ac0789c9",
+      "fileHash": "55cb5f38",
       "needsInterop": false
     },
     "@tiptap/extension-text-align": {
       "src": "../../node_modules/@tiptap/extension-text-align/dist/index.js",
       "file": "@tiptap_extension-text-align.js",
-      "fileHash": "82abf740",
+      "fileHash": "cb0b44c8",
       "needsInterop": false
     },
     "@tiptap/extension-underline": {
       "src": "../../node_modules/@tiptap/extension-underline/dist/index.js",
       "file": "@tiptap_extension-underline.js",
-      "fileHash": "89561c2e",
+      "fileHash": "e2804b14",
       "needsInterop": false
     },
     "@tiptap/starter-kit": {
       "src": "../../node_modules/@tiptap/starter-kit/dist/index.js",
       "file": "@tiptap_starter-kit.js",
-      "fileHash": "4fc37bd2",
+      "fileHash": "771e4c05",
       "needsInterop": false
     },
     "@tiptap/vue-3": {
       "src": "../../node_modules/@tiptap/vue-3/dist/index.js",
       "file": "@tiptap_vue-3.js",
-      "fileHash": "94b0df45",
+      "fileHash": "7b6947fb",
       "needsInterop": false
     },
     "apexcharts": {
       "src": "../../node_modules/apexcharts/dist/apexcharts.common.js",
       "file": "apexcharts.js",
-      "fileHash": "4322faa3",
+      "fileHash": "483b39c6",
       "needsInterop": true
     },
     "axios": {
       "src": "../../node_modules/axios/index.js",
       "file": "axios.js",
-      "fileHash": "ad77c9e5",
+      "fileHash": "7b1dd207",
       "needsInterop": false
     },
     "chart.js": {
       "src": "../../node_modules/chart.js/dist/chart.js",
       "file": "chart__js.js",
-      "fileHash": "03ef0244",
+      "fileHash": "3945f7a1",
       "needsInterop": false
     },
     "chart.js/auto": {
       "src": "../../node_modules/chart.js/auto/auto.js",
       "file": "chart__js_auto.js",
-      "fileHash": "48c527f4",
+      "fileHash": "6c69ea5c",
       "needsInterop": false
     },
     "daterangepicker": {
       "src": "../../node_modules/daterangepicker/daterangepicker.js",
       "file": "daterangepicker.js",
-      "fileHash": "d36a4ffa",
+      "fileHash": "ed4888d8",
       "needsInterop": true
     },
     "jquery": {
       "src": "../../node_modules/jquery/dist/jquery.js",
       "file": "jquery.js",
-      "fileHash": "784a1a4a",
+      "fileHash": "4dfa1306",
       "needsInterop": true
     },
     "mapbox-gl": {
       "src": "../../node_modules/mapbox-gl/dist/mapbox-gl.js",
       "file": "mapbox-gl.js",
-      "fileHash": "f5e1be7c",
+      "fileHash": "278a20c4",
       "needsInterop": true
     },
     "moment": {
       "src": "../../node_modules/moment/dist/moment.js",
       "file": "moment.js",
-      "fileHash": "f627060c",
+      "fileHash": "87bf1dca",
       "needsInterop": false
     },
     "moment/locale/th": {
       "src": "../../node_modules/moment/locale/th.js",
       "file": "moment_locale_th.js",
-      "fileHash": "19fe47d5",
+      "fileHash": "6492b662",
       "needsInterop": true
     },
     "shepherd.js": {
       "src": "../../node_modules/shepherd.js/dist/esm/shepherd.mjs",
       "file": "shepherd__js.js",
-      "fileHash": "d6cb8cfd",
+      "fileHash": "a4bf1fee",
       "needsInterop": false
     },
     "shiki": {
       "src": "../../node_modules/shiki/dist/index.mjs",
       "file": "shiki.js",
-      "fileHash": "e01e28cd",
+      "fileHash": "726e7342",
       "needsInterop": false
     },
     "swiper/element/bundle": {
       "src": "../../node_modules/swiper/swiper-element-bundle.mjs",
       "file": "swiper_element_bundle.js",
-      "fileHash": "423ed272",
+      "fileHash": "2b1d7684",
       "needsInterop": false
     },
     "ufo": {
       "src": "../../node_modules/ufo/dist/index.mjs",
       "file": "ufo.js",
-      "fileHash": "f416b3b5",
+      "fileHash": "1355a698",
       "needsInterop": false
     },
     "vue-chartjs": {
       "src": "../../node_modules/vue-chartjs/dist/index.js",
       "file": "vue-chartjs.js",
-      "fileHash": "e1d707ba",
+      "fileHash": "7a89aee8",
       "needsInterop": false
     },
     "vue-flatpickr-component": {
       "src": "../../node_modules/vue-flatpickr-component/dist/esm/index.js",
       "file": "vue-flatpickr-component.js",
-      "fileHash": "e2302cad",
+      "fileHash": "b3671f9b",
       "needsInterop": false
     },
     "vue-shepherd": {
       "src": "../../node_modules/vue-shepherd/src/entry.js",
       "file": "vue-shepherd.js",
-      "fileHash": "3e53bf4f",
+      "fileHash": "0db2b763",
       "needsInterop": false
     },
     "vue3-apexcharts": {
       "src": "../../node_modules/vue3-apexcharts/dist/vue3-apexcharts.js",
       "file": "vue3-apexcharts.js",
-      "fileHash": "686ad5b6",
+      "fileHash": "8812b0bf",
       "needsInterop": false
     },
     "vue3-perfect-scrollbar": {
       "src": "../../node_modules/vue3-perfect-scrollbar/dist/vue3-perfect-scrollbar.js",
       "file": "vue3-perfect-scrollbar.js",
-      "fileHash": "fdaec322",
+      "fileHash": "923a3e71",
       "needsInterop": false
     },
     "@casl/ability": {
       "src": "../../node_modules/@casl/ability/dist/es6m/index.mjs",
       "file": "@casl_ability.js",
-      "fileHash": "a0fd15f5",
+      "fileHash": "76ece7ff",
       "needsInterop": false
     },
-    "@antfu/utils": {
-      "src": "../../node_modules/@antfu/utils/dist/index.mjs",
-      "file": "@antfu_utils.js",
-      "fileHash": "bdf52a31",
+    "unplugin-vue-router/data-loaders/basic": {
+      "src": "../../node_modules/unplugin-vue-router/dist/data-loaders/basic.mjs",
+      "file": "unplugin-vue-router_data-loaders_basic.js",
+      "fileHash": "87bfd04e",
       "needsInterop": false
     },
     "webfontloader": {
       "src": "../../node_modules/webfontloader/webfontloader.js",
       "file": "webfontloader.js",
-      "fileHash": "a89b35f6",
+      "fileHash": "e35e8dc8",
       "needsInterop": true
     },
-    "unplugin-vue-router/data-loaders/basic": {
-      "src": "../../node_modules/unplugin-vue-router/dist/data-loaders/basic.mjs",
-      "file": "unplugin-vue-router_data-loaders_basic.js",
-      "fileHash": "f530d6f4",
+    "@antfu/utils": {
+      "src": "../../node_modules/@antfu/utils/dist/index.mjs",
+      "file": "@antfu_utils.js",
+      "fileHash": "bcd7ce00",
       "needsInterop": false
     },
     "cookie-es": {
       "src": "../../node_modules/cookie-es/dist/index.mjs",
       "file": "cookie-es.js",
-      "fileHash": "6a555a5d",
+      "fileHash": "3b38b10f",
       "needsInterop": false
     },
     "destr": {
       "src": "../../node_modules/destr/dist/index.mjs",
       "file": "destr.js",
-      "fileHash": "e620fb41",
+      "fileHash": "b396047f",
       "needsInterop": false
     }
   },
@@ -1239,20 +1239,14 @@
     "chunk-TVUBIVRU": {
       "file": "chunk-TVUBIVRU.js"
     },
-    "chunk-ZJ3H4KAC": {
-      "file": "chunk-ZJ3H4KAC.js"
-    },
     "chunk-SUROULCW": {
       "file": "chunk-SUROULCW.js"
     },
     "chunk-WWJ5FNY3": {
       "file": "chunk-WWJ5FNY3.js"
     },
-    "chunk-CSHRRDSG": {
-      "file": "chunk-CSHRRDSG.js"
-    },
-    "chunk-OBVC6BJK": {
-      "file": "chunk-OBVC6BJK.js"
+    "chunk-ZJ3H4KAC": {
+      "file": "chunk-ZJ3H4KAC.js"
     },
     "chunk-MOA6RKH5": {
       "file": "chunk-MOA6RKH5.js"
@@ -1266,14 +1260,20 @@
     "chunk-IOU3RG7D": {
       "file": "chunk-IOU3RG7D.js"
     },
+    "chunk-CSHRRDSG": {
+      "file": "chunk-CSHRRDSG.js"
+    },
+    "chunk-KKZ7DXUR": {
+      "file": "chunk-KKZ7DXUR.js"
+    },
+    "chunk-OBVC6BJK": {
+      "file": "chunk-OBVC6BJK.js"
+    },
     "chunk-5H6U43T6": {
       "file": "chunk-5H6U43T6.js"
     },
     "chunk-OLHXLYYE": {
       "file": "chunk-OLHXLYYE.js"
-    },
-    "chunk-KKZ7DXUR": {
-      "file": "chunk-KKZ7DXUR.js"
     },
     "chunk-LFWDD2CS": {
       "file": "chunk-LFWDD2CS.js"

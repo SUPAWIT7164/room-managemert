@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/utils/api'
 import Chart from 'chart.js/auto'
+import VueApexCharts from 'vue3-apexcharts'
 import { DEFAULT_DEVICE_TYPES, getDeviceTypeIcon, getDeviceTypeLabel } from '@/config/deviceTypes'
 
 // Import images
@@ -16,11 +17,28 @@ const roomBackgroundImage = roomBackgroundImageUrl
 const fanImage = fanImageUrl
 const buildingImage = buildingImageUrl
 
-// รูปอาคาร: ถ้ามี building.image จาก DB ใช้ (เติม origin ของ backend สำหรับ /uploads)
-// ถ้า VITE_API_BASE_URL เป็น full URL (เช่น http://localhost:5000/api) ใช้ origin นั้น ไม่ฉะนั้นใช้ window.origin (ต้อง proxy /uploads)
+// โหลดรูปจาก assets/images ตามชื่อไฟล์ที่เก็บใน DB (เช่น meetingroom.jpg)
+const assetsImagesMap = import.meta.glob('/src/assets/images/**/*', { eager: true, as: 'url' })
+
+function getImageFromAssets(filename) {
+  if (!filename || typeof filename !== 'string') return null
+  const clean = filename.trim()
+  if (!clean) return null
+  if (clean.includes('/') || clean.startsWith('http')) return null
+  for (const [path, url] of Object.entries(assetsImagesMap)) {
+    const normalized = path.replace(/\\/g, '/')
+    if (normalized.endsWith(clean) || normalized.endsWith('/' + clean)) return url
+  }
+  return null
+}
+
+// รูปอาคาร: ถ้า DB เก็บชื่อไฟล์ (เช่น A1006.jpg) → หาจาก assets/images
+// ถ้าเป็น full URL หรือ path จาก backend → ใช้ origin + path
 function buildingImageSrc(b) {
   if (!b?.image) return buildingImage
   if (b.image.startsWith('http')) return b.image
+  const fromAssets = getImageFromAssets(b.image)
+  if (fromAssets) return fromAssets
   if (typeof window === 'undefined') return b.image
   const apiBase = import.meta.env.VITE_API_BASE_URL || ''
   const backendOrigin = apiBase.startsWith('http') ? apiBase.replace(/\/api\/?$/, '') : ''
@@ -28,10 +46,13 @@ function buildingImageSrc(b) {
   return origin.replace(/\/$/, '') + (b.image.startsWith('/') ? b.image : '/' + b.image)
 }
 
-// รูป area (floor plan) หรือ room: ถ้ามี .image จาก DB ใช้ URL ที่เข้าถึงได้ผ่านเว็บ ไม่ฉะนั้นใช้ fallback
+// รูป area (floor plan) หรือ room: ถ้า DB เก็บชื่อไฟล์ (เช่น meetingroom.jpg) → หาจาก assets/images
+// ถ้าเป็น full URL หรือ path จาก backend → ใช้ imageSrcFromDb
 function imageSrcFromDb(imageUrl, fallback) {
   if (!imageUrl || typeof imageUrl !== 'string') return fallback
   if (imageUrl.startsWith('http')) return imageUrl
+  const fromAssets = getImageFromAssets(imageUrl)
+  if (fromAssets) return fromAssets
   if (typeof window === 'undefined') return imageUrl
   const apiBase = import.meta.env.VITE_API_BASE_URL || ''
   const backendOrigin = apiBase.startsWith('http') ? apiBase.replace(/\/api\/?$/, '') : ''
@@ -54,22 +75,47 @@ const areas = ref([])
 const rooms = ref([])
 const selectedRoomId = ref(null)
 
-// Check navigation state
-const selectedFloor = computed(() => route.query.floor)
+// Check navigation state — ใช้ area (id จากตาราง areas) แทน floor
 const selectedBuilding = computed(() => route.query.building)
-const selectedArea = computed(() => route.query.area)
+const selectedAreaId = computed(() => route.query.area) // area = areas.id
 const selectedRoomFromQuery = computed(() => route.query.room)
-const showBuildingList = computed(() => !selectedFloor.value)
-const showFloorPlan = computed(() => selectedFloor.value && !selectedArea.value)
-const showRoomControl = computed(() => selectedFloor.value && selectedArea.value)
+/** Area object จาก DB (เมื่อมี area id ใน query) */
+const selectedArea = computed(() => {
+  const id = _toNumOrNull(selectedAreaId.value)
+  if (id == null) return null
+  return areas.value.find(a => Number(a.id) === id) || null
+})
+/** เลขชั้น — ดึงจาก area ที่เลือก (สำหรับ logic ที่ยังอ้าง floor) */
+const selectedFloor = computed(() => {
+  if (selectedArea.value?.floor != null) return selectedArea.value.floor
+  const f = _toNumOrNull(route.query.floor)
+  return f
+})
+const showBuildingList = computed(() => !selectedAreaId.value)
+const showFloorPlan = computed(() => selectedAreaId.value && !selectedRoomFromQuery.value)
+const showRoomControl = computed(() => selectedAreaId.value && selectedRoomFromQuery.value)
 
-// รูป floor plan: ดึงจาก area ของชั้นที่เลือก (area.image) ถ้ามี ไม่ฉะนั้นใช้รูป default
+// รูป floor plan: ใช้ area ที่เลือก (area.image) หรือ area แรกของ building+floor
 const currentFloorArea = computed(() => {
+  if (selectedArea.value) return selectedArea.value
   const buildingId = Number(selectedBuilding.value)
   const floorNum = Number(selectedFloor.value)
-  if (!buildingId || !floorNum) return null
+  if (!buildingId || floorNum == null) return null
   return areas.value.find(a => Number(a.building_id ?? a.buildingId) === buildingId && Number(a.floor) === floorNum) || null
 })
+
+/** ชื่อ area จาก DB (ใช้แสดงในหัวข้อ) — ถ้ามี area ที่เลือกใช้ชื่อนั้น ไม่ฉะนั้น fallback */
+function getFloorDisplayName(buildingId, floorNum) {
+  const bid = Number(buildingId)
+  const f = Number(floorNum)
+  if (!bid && bid !== 0) return `ชั้น ${floorNum ?? ''}`
+  const list = areas.value.filter(a => Number(a.building_id ?? a.buildingId) === bid && Number(a.floor ?? a.Floor) === f)
+  if (list.length === 0) return `ชั้น ${f}`
+  return list.map(a => a.name || '').filter(Boolean).join(', ') || `ชั้น ${f}`
+}
+const selectedAreaDisplayName = computed(() =>
+  selectedArea.value?.name ?? getFloorDisplayName(selectedBuilding.value, selectedFloor.value),
+)
 const floorPlanImageDisplay = computed(() => {
   const area = currentFloorArea.value
   if (area?.image) return imageSrcFromDb(area.image, floorPlanImageUrl)
@@ -88,8 +134,7 @@ const roomBackgroundImageDisplay = computed(() => {
 })
 
 // ---- Query helpers (prepare for real control API deep-links)
-// รองรับ URL รูปแบบ: /rooms/control?building=1&floor=3&area=Mercury&room=28
-// โดย room อาจเป็น "room id" หรือ "เลขห้อง/ชื่อห้อง" → map เป็น room.id ที่แท้จริง
+// URL รูปแบบ: /rooms/control?building=1&area=1&room=28 (area = areas.id)
 const _norm = v => String(v ?? '').trim().toLowerCase()
 const _toNumOrNull = v => {
   const n = Number(String(v ?? '').trim())
@@ -97,44 +142,20 @@ const _toNumOrNull = v => {
 }
 
 const resolveAreaFromQuery = () => {
-  const buildingId = _toNumOrNull(selectedBuilding.value)
-  const floorNumber = _toNumOrNull(selectedFloor.value)
-  const areaName = _norm(selectedArea.value)
-  if (!buildingId || floorNumber === null || !areaName) return null
-
-  // Prefer DB area match (building + floor + name)
-  const dbArea = areas.value.find(a =>
-    Number(a.building_id) === buildingId
-    && Number(a.floor) === floorNumber
-    && _norm(a.name) === areaName,
-  )
-  if (dbArea) return { source: 'db', area: dbArea }
-
-  // Fallback: floorPlanArea name exists but not in DB yet
-  return { source: 'plan', area: { name: selectedArea.value } }
+  const areaId = _toNumOrNull(selectedAreaId.value)
+  if (areaId != null) {
+    const dbArea = areas.value.find(a => Number(a.id) === areaId)
+    if (dbArea) return { source: 'db', area: dbArea }
+  }
+  return null
 }
 
 const resolveRoomIdFromQuery = () => {
   const roomQueryRaw = selectedRoomFromQuery.value
   if (roomQueryRaw === undefined || roomQueryRaw === null || String(roomQueryRaw).trim() === '') return null
 
-  const buildingId = _toNumOrNull(selectedBuilding.value)
-  const floorNumber = _toNumOrNull(selectedFloor.value)
-  const areaMatch = resolveAreaFromQuery()
-
-  // Candidate rooms (prefer rooms under matched DB area)
-  let candidateRooms = rooms.value
-  if (areaMatch?.source === 'db') {
-    candidateRooms = rooms.value.filter(r => Number(r.area_id) === Number(areaMatch.area.id))
-  } else if (buildingId && floorNumber !== null) {
-    // If DB area not found, still constrain by building/floor if possible
-    const candidateAreaIds = areas.value
-      .filter(a => Number(a.building_id) === buildingId && Number(a.floor) === floorNumber)
-      .map(a => Number(a.id))
-    if (candidateAreaIds.length) {
-      candidateRooms = rooms.value.filter(r => candidateAreaIds.includes(Number(r.area_id)))
-    }
-  }
+  // ใช้เฉพาะห้องที่มี x1,y1,x2,y2 (roomsWithPositionInArea)
+  const candidateRooms = roomsWithPositionInArea.value
 
   const qStr = String(roomQueryRaw).trim()
   const qNorm = _norm(qStr)
@@ -163,95 +184,75 @@ const resolveRoomIdFromQuery = () => {
 }
 
 const resolveRoomIdFromAreaOnly = () => {
-  const areaMatch = resolveAreaFromQuery()
-  if (!areaMatch) return null
-
-  // If DB area exists, pick first room in that area
-  if (areaMatch.source === 'db') {
-    const areaRooms = rooms.value.filter(r => Number(r.area_id) === Number(areaMatch.area.id))
-    return areaRooms[0]?.id ?? null
-  }
-
-  // Fallback: use hardcoded mapping (areas not yet connected to DB)
-  const mappedRoomName = areaRoomMapping[selectedArea.value]
-  if (mappedRoomName) {
-    const room = rooms.value.find(r => _norm(r.name) === _norm(mappedRoomName))
-      || rooms.value.find(r => _norm(r.name).includes(_norm(mappedRoomName)))
-    return room?.id ?? null
-  }
-
-  return null
+  // ใช้เฉพาะห้องที่มี x1,y1,x2,y2 (roomsWithPositionInArea)
+  const areaRooms = roomsWithPositionInArea.value
+  return areaRooms[0]?.id ?? null
 }
 
 const isSuperAdmin = computed(() => authStore.isSuperAdmin)
 
 // Show all buildings (removed filter for "อาคาร A" only)
 const filteredBuildings = computed(() => {
-  return buildings.value
+  return [...buildings.value].sort((a, b) => Number(a.id) - Number(b.id))
 })
 
-// Get available floors for selected building (จาก building.floors หรือ derive จาก areas)
-const availableFloors = computed(() => {
-  if (!selectedBuilding.value) return []
+// รายการ area ของอาคารที่เลือก (สำหรับ dropdown)
+const availableAreas = computed(() => {
   const buildingId = Number(selectedBuilding.value)
-  const building = buildings.value.find(b => Number(b.id) === buildingId)
-  if (building && building.floors && building.floors.length > 0) {
-    return building.floors.map(floor => ({
-      value: Number(floor.floor ?? floor),
-      title: `ชั้น ${floor.floor ?? floor}`,
-    }))
-  }
-  // Fallback: ดึงชั้นจาก areas ของอาคารนี้
-  const buildingAreas = areas.value.filter(a => Number(a.building_id ?? a.buildingId) === buildingId)
-  const floorSet = new Set()
-  buildingAreas.forEach(a => {
-    const f = Number(a.floor ?? a.Floor)
-    if (!Number.isNaN(f)) floorSet.add(f)
-  })
-  return Array.from(floorSet).sort((a, b) => a - b).map(f => ({
-    value: f,
-    title: `ชั้น ${f}`,
-  }))
+  if (!buildingId) return []
+  return areas.value
+    .filter(a => Number(a.building_id ?? a.buildingId) === buildingId)
+    .sort((a, b) => (Number(a.floor ?? 0) - Number(b.floor ?? 0)) || String(a.name || '').localeCompare(String(b.name || '')))
+    .map(a => ({ value: Number(a.id), title: a.name || `Area ${a.id}` }))
 })
 
-// Get available rooms for selected building, floor, and area
-const availableRooms = computed(() => {
-  if (!selectedBuilding.value || !selectedFloor.value) return []
-  
-  try {
-    const buildingId = Number(selectedBuilding.value)
-    const floorNumber = Number(selectedFloor.value)
-    
-    const currentFloorAreas = areas.value.filter(area => {
-      const aBuildingId = Number(area.building_id ?? area.buildingId)
-      const aFloor = Number(area.floor ?? area.Floor)
-      return aBuildingId === buildingId && aFloor === floorNumber
-    })
-    
-    if (currentFloorAreas.length === 0) return []
+/** Areas ของอาคาร (สำหรับการ์ดรายการตึก — แสดงเป็นรายการ area แทน floor) */
+function getAreasForBuilding(buildingId) {
+  const bid = Number(buildingId)
+  return areas.value
+    .filter(a => Number(a.building_id ?? a.buildingId) === bid)
+    .sort((a, b) => (Number(a.floor ?? 0) - Number(b.floor ?? 0)) || String(a.name || '').localeCompare(String(b.name || '')))
+}
+function getRoomCountInArea(areaId) {
+  return rooms.value.filter(r => Number(r.area_id ?? r.areaId) === Number(areaId)).length
+}
 
-    // ถ้ามี area ที่เลือกอยู่ → กรองเฉพาะห้องของ area นั้น
-    let targetAreas = currentFloorAreas
-    if (selectedArea.value) {
-      const areaName = _norm(selectedArea.value)
-      const matched = currentFloorAreas.filter(a => _norm(a.name) === areaName)
-      if (matched.length > 0) targetAreas = matched
-    }
-    
-    const areaIds = targetAreas.map(a => Number(a.id))
-    const filteredRooms = rooms.value.filter(room => {
-      const rid = Number(room.area_id ?? room.areaId)
-      return areaIds.includes(rid)
-    })
-    
-    return filteredRooms.map(room => {
+// ห้องที่มี area-box (มี x1,y1,x2,y2 และขนาด >= 5%) — ใช้สำหรับ floor plan
+const roomsWithPositionInArea = computed(() => {
+  const areaId = _toNumOrNull(selectedAreaId.value)
+  if (areaId == null) return []
+  return rooms.value.filter(r => {
+    if (Number(r.area_id ?? r.areaId) !== areaId) return false
+    const x1 = _toNumOrNull(r.x1)
+    const y1 = _toNumOrNull(r.y1)
+    const x2 = _toNumOrNull(r.x2)
+    const y2 = _toNumOrNull(r.y2)
+    if (x1 == null || y1 == null || x2 == null || y2 == null) return false
+    const w = x2 - x1
+    const h = y2 - y1
+    return w >= 5 && h >= 5
+  })
+})
+
+// ห้องทั้งหมดใน area (สำหรับ dropdown — แสดงทุกห้องที่มี area_id ตรง ไม่กรองตาม x1,y1,x2,y2)
+const roomsInArea = computed(() => {
+  let areaId = _toNumOrNull(selectedAreaId.value)
+  if (areaId == null && selectedBuilding.value != null && selectedFloor.value != null) {
+    const area = currentFloorArea.value
+    if (area) areaId = Number(area.id)
+  }
+  if (areaId == null) return []
+  return rooms.value.filter(r => Number(r.area_id ?? r.areaId) === areaId)
+})
+
+// Get available rooms — แสดงเฉพาะห้องที่มี x1,y1,x2,y2 ใน DB (ไม่แสดงห้องที่ไม่มีข้อมูล position เช่น DISCUSSION)
+const availableRooms = computed(() => {
+  try {
+    return roomsWithPositionInArea.value.map(room => {
       const rawName = room.name ?? room.Name
       const rawArea = room.area_name ?? room.Area_name
       const name = (rawName && String(rawName).trim()) || (rawArea && String(rawArea).trim()) || null
-      return {
-        value: room.id,
-        title: name || `ห้อง ${room.id}`,
-      }
+      return { value: Number(room.id), title: name || `ห้อง ${room.id}` }
     })
   } catch (error) {
     console.error('Error computing available rooms:', error)
@@ -268,13 +269,19 @@ const selectedRoomTitle = computed(() => {
 
 // Floor Plan Edit States
 const floorPlanEditMode = ref(false)
-const floorPlanAreas = ref([
-  { id: 1, name: 'Mercury', icon: 'tabler-box', top: 15, left: 8, width: 25, height: 30 },
-  { id: 2, name: 'Earth', icon: 'tabler-layout-grid', top: 20, left: 38, width: 28, height: 40 },
-  { id: 3, name: 'Jupiter', icon: 'tabler-home', top: 25, left: 70, width: 22, height: 35 },
-  { id: 4, name: 'Mars', icon: 'tabler-square', top: 55, left: 8, width: 25, height: 30 },
-  { id: 5, name: 'Venus', icon: 'tabler-apps', top: 60, left: 38, width: 28, height: 25 },
-])
+// area box แสดงเฉพาะเมื่อ room มี x1,y1,x2,y2 จาก DB — เริ่มต้นเป็น [] ไม่ใช้ demo data
+const floorPlanAreas = ref([])
+// อุปกรณ์ระดับ area (area_id, room_id NULL) สำหรับแสดง icon บน floor plan
+const floorPlanAreaDevices = ref({ light: [], ac: [], erv: [], vent_fan: [] })
+// สถานะต่ออุปกรณ์ (เหมือน deviceStates ของ room) — ใช้เมื่อแสดง icon บน floor plan area
+const floorPlanAreaDeviceStates = ref({ light: [], ac: [], erv: [], vent_fan: [] })
+// Settings สำหรับ area devices (speed, mode, temperature) — ใช้ getErvSpeed, getACIcon ฯลฯ
+const floorPlanAreaDeviceSettings = ref({
+  erv: { speed: [], mode: [] },
+  ac: { mode: [], temperature: [] },
+  light: { brightness: [] },
+  vent_fan: {}
+})
 
 // Mapping between area names and specific room names (for areas not yet connected to database)
 const areaRoomMapping = {
@@ -287,6 +294,7 @@ const areaRoomMapping = {
 const selectedAreaForEdit = ref(null)
 const editingAreaName = ref(null)
 const editingAreaNameValue = ref('')
+const saveFloorPlanLoading = ref(false)
 const resizingArea = ref(null)
 const resizeStart = ref({ x: 0, y: 0, width: 0, height: 0, left: 0, top: 0 })
 const draggingArea = ref(null)
@@ -301,7 +309,8 @@ const systemControlTargetRoomId = ref(null) // Store which room button was click
 const floorDeviceStates = ref({
   light: [],
   ac: [],
-  erv: []
+  erv: [],
+  vent_fan: []
 }) // Store device states for all rooms in floor/area
 
 // System Control Button Position and Size (for single button - deprecated)
@@ -313,7 +322,7 @@ const resizingSystemControl = ref(false)
 const resizeSystemControlStart = ref({ x: 0, y: 0, width: 0, height: 0 })
 
 // Per-room device states (for individual room control buttons)
-const roomDeviceStates = ref({}) // { roomId: { light: [], ac: [], erv: [] } }
+const roomDeviceStates = ref({}) // { roomId: { light: [], ac: [], erv: [], vent_fan: [] } }
 const loadingRoomStates = ref({}) // { roomId: true/false }
 const roomStatesRefreshInterval = ref(null) // Interval for auto-refreshing room states
 
@@ -337,12 +346,14 @@ const allSystemsOn = computed(() => {
   const lightStates = floorDeviceStates.value.light || []
   const acStates = floorDeviceStates.value.ac || []
   const ervStates = floorDeviceStates.value.erv || []
+  const ventFanStates = floorDeviceStates.value.vent_fan || []
   
   const hasLightOn = lightStates.length > 0 && lightStates.some(state => state === true)
   const hasAcOn = acStates.length > 0 && acStates.some(state => state === true)
   const hasErvOn = ervStates.length > 0 && ervStates.some(state => state === true)
+  const hasVentFanOn = ventFanStates.length > 0 && ventFanStates.some(state => state === true)
   
-  const result = hasLightOn || hasAcOn || hasErvOn
+  const result = hasLightOn || hasAcOn || hasErvOn || hasVentFanOn
   
   // Debug logging
   if (result) {
@@ -350,9 +361,11 @@ const allSystemsOn = computed(() => {
       light: lightStates,
       ac: acStates,
       erv: ervStates,
+      vent_fan: ventFanStates,
       hasLightOn,
       hasAcOn,
       hasErvOn,
+      hasVentFanOn,
       result
     })
   }
@@ -363,14 +376,33 @@ const allSystemsOn = computed(() => {
 // Get rooms for each area in floor plan
 const areaRoomsMap = computed(() => {
   const map = {}
-  if (!selectedBuilding.value || !selectedFloor.value) return map
+  if (!selectedBuilding.value || (!selectedFloor.value && !selectedAreaId.value)) return map
   
-  console.log('Computing areaRoomsMap...')
-  console.log('Available rooms:', rooms.value.map(r => ({ id: r.id, name: r.name })))
+  const areaId = _toNumOrNull(selectedAreaId.value)
+  const roomsInCurrentArea = roomsInArea.value
   
   floorPlanAreas.value.forEach(area => {
     let room = null
-    
+
+    // Virtual area (area-22) — อุปกรณ์ area_id แสดง icon คอนโทรล ใช้ห้องแรกใน area เป็น proxy สำหรับ control
+    if (typeof area.id === 'string' && area.id.startsWith('area-')) {
+      const aid = parseInt(area.id.replace('area-', ''), 10)
+      if (roomsInCurrentArea.length > 0) {
+        room = roomsInCurrentArea[0]
+        map[area.id] = { ...room, name: area.name || room.name }
+      }
+      return
+    }
+
+    // Area ที่สร้างจาก room (area.id = room.id) — map โดยตรง
+    if (area.id != null) {
+      room = rooms.value.find(r => Number(r.id) === Number(area.id))
+      if (room) {
+        map[area.id] = room
+        return
+      }
+    }
+
     // Check if area has room mapping
     if (areaRoomMapping[area.name]) {
       const roomName = areaRoomMapping[area.name]
@@ -404,14 +436,19 @@ const areaRoomsMap = computed(() => {
         console.warn(`Available room names:`, rooms.value.map(r => r.name))
       }
     } else {
-      // Find room from database area
-      const dbArea = areas.value.find(a => {
-        const areaBuildingId = String(a.building_id)
-        const areaFloor = String(a.floor)
-        const buildingIdStr = String(selectedBuilding.value)
-        const floorNumberStr = String(selectedFloor.value)
-        return a.name === area.name && areaBuildingId === buildingIdStr && areaFloor === floorNumberStr
-      })
+      let dbArea = null
+      if (area.id != null) {
+        dbArea = areas.value.find(a => Number(a.id) === Number(area.id))
+      }
+      if (!dbArea) {
+        dbArea = areas.value.find(a => {
+          const areaBuildingId = String(a.building_id)
+          const areaFloor = String(a.floor)
+          const buildingIdStr = String(selectedBuilding.value)
+          const floorNumberStr = String(selectedFloor.value)
+          return a.name === area.name && areaBuildingId === buildingIdStr && areaFloor === floorNumberStr
+        })
+      }
       
       if (dbArea) {
         const areaRooms = rooms.value.filter(r => r.area_id === dbArea.id)
@@ -440,8 +477,9 @@ const isRoomSystemsOn = (roomId) => {
   const hasLightOn = states.light && states.light.some(state => state === true || state === 1 || state === 'on')
   const hasAcOn = states.ac && states.ac.some(state => state === true || state === 1 || state === 'on')
   const hasErvOn = states.erv && states.erv.some(state => state === true || state === 1 || state === 'on')
+  const hasVentFanOn = states.vent_fan && states.vent_fan.some(state => state === true || state === 1 || state === 'on')
   
-  return hasLightOn || hasAcOn || hasErvOn
+  return hasLightOn || hasAcOn || hasErvOn || hasVentFanOn
 }
 
 // Room Control States
@@ -457,6 +495,7 @@ const deviceStates = reactive({
   light: [],
   ac: [],
   erv: [],
+  vent_fan: [],
 })
 
 const ervSettings = reactive({
@@ -468,10 +507,16 @@ const acSettings = reactive({
   mode: [],
 })
 
+// Light brightness (Home Assistant light brightness typically 0-255)
+const lightSettings = reactive({
+  brightness: [],
+})
+
 const controls = reactive({
   light: false,
   ac: false,
   erv: false,
+  vent_fan: false,
 })
 
 const acTemperature = ref(25)
@@ -493,6 +538,120 @@ const environmentalData = reactive({
   tvoc: 1.45,
 })
 
+// ===== Energy Usage =====
+const energyPeriod = ref('1d')
+const energyCustomStart = ref('')
+const energyCustomEnd = ref('')
+const energyLoading = ref(false)
+const energyData = reactive({
+  records: [],
+  summary: { totalEnergy: 0, avgPower: 0, maxPower: 0, recordCount: 0 },
+})
+const energyUsedFallback = ref(false)
+const energyIsMock = ref(false) // true = ใช้ข้อมูลตัวอย่าง (ยังไม่มีใน DB)
+
+/** สร้างข้อมูลพลังงานตัวอย่างสำหรับแสดงเมื่อยังไม่มีข้อมูลใน DB */
+function getMockEnergyData(period) {
+  const now = new Date()
+  let count = 24
+  let stepMs = 60 * 60 * 1000 // 1 ชม.
+  if (period === '7d') {
+    count = 28
+    stepMs = 6 * 60 * 60 * 1000 // 6 ชม.
+  } else if (period === '1m') {
+    count = 30
+    stepMs = 24 * 60 * 60 * 1000 // 1 วัน
+  }
+  const records = []
+  let cumEnergy = 0
+  const basePower = 80
+  const peakPower = 350
+  for (let i = 0; i < count; i++) {
+    const t = new Date(now.getTime() - (count - i) * stepMs)
+    const hour = t.getHours()
+    const power = Math.round(basePower + (peakPower - basePower) * (0.3 + 0.5 * Math.sin((hour - 8) / 12 * Math.PI)) + (Math.random() - 0.5) * 40)
+    const safePower = Math.max(20, Math.min(400, power))
+    cumEnergy += (safePower / 1000) * (stepMs / 3600000)
+    records.push({
+      recorded_at: t.toISOString(),
+      power: safePower,
+      energy: Math.round(cumEnergy * 100) / 100,
+      voltage: 220,
+      current: safePower / 220,
+    })
+  }
+  const powers = records.map(r => r.power)
+  const avgPower = powers.reduce((a, b) => a + b, 0) / powers.length
+  const maxPower = Math.max(...powers)
+  return {
+    records,
+    summary: {
+      totalEnergy: Math.round(cumEnergy * 100) / 100,
+      avgPower: Math.round(avgPower),
+      maxPower: Math.round(maxPower),
+      recordCount: records.length,
+    },
+  }
+}
+
+const energyChartOptions = computed(() => ({
+  chart: { type: 'area', height: 300, toolbar: { show: true }, zoom: { enabled: true } },
+  colors: ['#2196f3', '#ff9800'],
+  stroke: { curve: 'smooth', width: 2 },
+  fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05 } },
+  xaxis: {
+    type: 'datetime',
+    labels: { datetimeUTC: false, format: energyPeriod.value === '1d' ? 'HH:mm' : 'dd/MM' },
+  },
+  yaxis: [
+    { title: { text: 'Power (W)' }, labels: { formatter: v => v?.toFixed(0) } },
+    { opposite: true, title: { text: 'Energy (kWh)' }, labels: { formatter: v => v?.toFixed(2) } },
+  ],
+  tooltip: { x: { format: 'dd MMM yyyy HH:mm' }, shared: true },
+  legend: { position: 'top' },
+}))
+const energyChartSeries = computed(() => [
+  { name: 'Power (W)', type: 'area', data: energyData.records.map(r => ({ x: new Date(r.recorded_at).getTime(), y: parseFloat(r.power || 0) })) },
+  { name: 'Energy (kWh)', type: 'line', data: energyData.records.map(r => ({ x: new Date(r.recorded_at).getTime(), y: parseFloat(r.energy || 0) })) },
+])
+
+const loadEnergyData = async () => {
+  if (!selectedRoomId.value) return
+  energyLoading.value = true
+  energyIsMock.value = false
+  try {
+    const params = {}
+    if (energyPeriod.value === 'custom' && energyCustomStart.value && energyCustomEnd.value) {
+      params.start = energyCustomStart.value
+      params.end = energyCustomEnd.value
+    } else {
+      params.period = energyPeriod.value
+    }
+    const res = await api.get(`/energy/room/${selectedRoomId.value}`, { params })
+    if (res.data?.success && (res.data.data.records || []).length > 0) {
+      energyData.records = res.data.data.records || []
+      Object.assign(energyData.summary, res.data.data.summary || {})
+      energyUsedFallback.value = !!res.data.data.usedFallback
+    } else {
+      // ยังไม่มีข้อมูลใน DB — ใช้ข้อมูลตัวอย่าง (mock)
+      const mock = getMockEnergyData(energyPeriod.value)
+      energyData.records = mock.records
+      Object.assign(energyData.summary, mock.summary)
+      energyUsedFallback.value = false
+      energyIsMock.value = true
+    }
+  } catch (e) {
+    console.warn('[Energy] Failed to load energy data, using mock:', e?.message)
+    const mock = getMockEnergyData(energyPeriod.value)
+    energyData.records = mock.records
+    Object.assign(energyData.summary, mock.summary)
+    energyUsedFallback.value = false
+    energyIsMock.value = true
+  } finally {
+    energyLoading.value = false
+  }
+}
+
 // Loading state for sensor data
 const loadingSensorData = ref(false)
 const sensorDataRefreshInterval = ref(null)
@@ -513,7 +672,23 @@ const devicePositions = reactive({
   light: [],
   ac: [],
   erv: [],
+  vent_fan: [],
+  /** จุดยึดแถว AM319 (device_type = am319 ในตาราง devices) — แสดง 9 sensor เรียงในแนวนอน */
+  am319: [],
 })
+
+/** ลำดับการแสดงบนแปลนห้อง (ค่าจาก environmental_data ตาม room_id) */
+const am319SensorOrder = [
+  'temperature',
+  'humidity',
+  'co2',
+  'tvoc',
+  'pm25',
+  'pm10',
+  'pressure',
+  'hcho',
+  'noise',
+]
 
 // Sensor type definitions for AM319 & Noise
 const sensorTypeDefinitions = {
@@ -523,6 +698,10 @@ const sensorTypeDefinitions = {
   humidity: { label: 'Humidity', icon: 'tabler-droplet', color: '#00bcd4', unit: '%', key: 'humidity' },
   motion: { label: 'Motion', icon: 'tabler-walk', color: '#f44336', unit: '', key: 'motion' },
   pm25: { label: 'PM2.5', icon: 'tabler-grain', color: '#9c27b0', unit: 'µg/m³', key: 'pm25' },
+  pm10: { label: 'PM10', icon: 'tabler-grain', color: '#607d8b', unit: 'µg/m³', key: 'pm10' },
+  tvoc: { label: 'TVOC', icon: 'tabler-molecule', color: '#795548', unit: 'mg/m³', key: 'tvoc' },
+  pressure: { label: 'Pressure', icon: 'tabler-gauge', color: '#37474f', unit: 'hPa', key: 'pressure' },
+  hcho: { label: 'HCHO', icon: 'tabler-flask', color: '#e91e63', unit: 'mg/m³', key: 'hcho' },
 }
 
 // Sensor overlays on room layout — each entry: { id, type, x, y }
@@ -551,7 +730,14 @@ const getSensorValue = (sensorType) => {
   if (!def) return ''
   const val = environmentalData[def.key]
   if (sensorType === 'motion') return val || 'N/A'
-  return val != null ? val : '--'
+  if (val == null || val === '') return '--'
+  if (typeof val === 'number' && Number.isFinite(val)) {
+    if (sensorType === 'co2' || sensorType === 'pm25' || sensorType === 'pm10') return Math.round(val)
+    if (sensorType === 'hcho' || sensorType === 'tvoc') return Number(val.toFixed(3))
+    if (sensorType === 'temperature' || sensorType === 'humidity' || sensorType === 'noise' || sensorType === 'pressure')
+      return Number(val.toFixed(1))
+  }
+  return val
 }
 
 const getSensorUnit = (sensorType) => sensorTypeDefinitions[sensorType]?.unit || ''
@@ -642,7 +828,7 @@ const fetchBuildings = async () => {
     
     const rawBuildings = buildingsResponse.data.data || []
     areas.value = areasResponse.data.data || []
-    const allRooms = roomsResponse.data.data || []
+    const allRooms = roomsResponse.data.data || roomsResponse.data || []
     
     console.log('[Rooms Control] Fetched data:', {
       buildingsCount: rawBuildings.length,
@@ -727,53 +913,33 @@ const loadRoomDevices = async () => {
     console.warn('Failed to sync from Home Assistant, will use DB state:', syncError)
   }
 
-  // Initialize device positions (default layout)
-  devicePositions.light = [
-    { x: 15, y: 20 }, { x: 25, y: 20 }, { x: 35, y: 20 }, { x: 45, y: 20 },
-    { x: 55, y: 20 }, { x: 65, y: 20 }, { x: 75, y: 20 }, { x: 85, y: 20 },
-    { x: 15, y: 80 }, { x: 25, y: 80 }, { x: 35, y: 80 }, { x: 45, y: 80 },
-    { x: 55, y: 80 }, { x: 65, y: 80 },
-  ]
-  
-  devicePositions.ac = [
-    { x: 20, y: 50 }, { x: 50, y: 50 }, { x: 80, y: 50 },
-  ]
-  
-  devicePositions.erv = [
-    { x: 30, y: 30 }, { x: 50, y: 30 }, { x: 70, y: 30 },
-  ]
+  // Initialize device positions - เริ่มต้นเป็น empty (จะโหลดจาก DB)
+  devicePositions.light = []
+  devicePositions.ac = []
+  devicePositions.erv = []
+  devicePositions.vent_fan = []
+  devicePositions.am319 = []
 
-  // Ensure minimum device counts (AC: 3, ERV: 3)
-  if (devicePositions.ac.length < 3) {
-    devicePositions.ac = [
-      { x: 20, y: 50 }, { x: 50, y: 50 }, { x: 80, y: 50 },
-    ]
-  }
-  if (devicePositions.erv.length < 3) {
-    devicePositions.erv = [
-      { x: 30, y: 30 }, { x: 50, y: 30 }, { x: 70, y: 30 },
-    ]
-  }
-
-  // Initialize with default values (will be overwritten by API data)
-  const maxLightBulbs = 14
+  // Initialize with empty arrays (will be populated from API data)
   const tempDeviceStates = {
-    light: new Array(Math.min(devicePositions.light.length, maxLightBulbs)).fill(false),
-    ac: new Array(3).fill(false),
-    erv: new Array(3).fill(false),
+    light: [],
+    ac: [],
+    erv: [],
+    vent_fan: [],
   }
   
   const tempAcSettings = {
-    mode: new Array(3).fill('off'), // Default to 'off' to match Home Assistant
+    mode: [], // จะโหลดจาก API
   }
   
-  const tempAcTemperatures = new Array(3).fill(25)
+  const tempAcTemperatures = []
   
   const tempErvSettings = {
-    speed: new Array(3).fill('low'),
-    mode: new Array(3).fill('normal'),
+    speed: [],
+    mode: [],
   }
 
+  let devicesFromApi = null
   try {
     // Load device states from API (now includes synced data from HA)
     const response = await api.get(`/rooms/${selectedRoomId.value}/devices`)
@@ -781,141 +947,137 @@ const loadRoomDevices = async () => {
     console.log('Full response:', response.data)
     if (response.data && response.data.data) {
       const devices = response.data.data
+      devicesFromApi = devices
+      // deviceIdsByType for new device_id-based control route
+      if (devices.deviceIdsByType) {
+        // light is not HA mapping, but we keep ids for control-by-id
+        // store as arrays by index (order by devices.id)
+        // Use refs already present (acDeviceIds/ervDeviceIds) for minimal changes
+        if (Array.isArray(devices.deviceIdsByType.ac)) {
+          acDeviceIds.value = {}
+          devices.deviceIdsByType.ac.forEach((id, i) => { acDeviceIds.value[i] = id })
+        }
+        if (Array.isArray(devices.deviceIdsByType.erv)) {
+          ervDeviceIds.value = {}
+          devices.deviceIdsByType.erv.forEach((id, i) => { ervDeviceIds.value[i] = id })
+        }
+        if (Array.isArray(devices.deviceIdsByType.light)) {
+          lightDeviceIds.value = {}
+          devices.deviceIdsByType.light.forEach((id, i) => { lightDeviceIds.value[i] = id })
+        }
+        if (Array.isArray(devices.deviceIdsByType.vent_fan)) {
+          ventFanDeviceIds.value = {}
+          devices.deviceIdsByType.vent_fan.forEach((id, i) => { ventFanDeviceIds.value[i] = id })
+        }
+      }
       console.log('Device states from API:', devices.deviceStates)
       if (devices.deviceStates) {
-        // Load light states
-        if (devices.deviceStates.light) {
-          const lightStatesToLoad = devices.deviceStates.light.slice(0, maxLightBulbs)
-          tempDeviceStates.light = lightStatesToLoad.map(state => 
-            state.status === true || state.status === 1 || state.status === 'on'
+        // Load light states (ใช้จำนวนจริงจาก DB)
+        if (devices.deviceStates.light && devices.deviceStates.light.length > 0) {
+          const lightEntries = devices.deviceStates.light || []
+          const brightnesses = lightEntries.map(entry => {
+            const b = entry?.settings?.brightness ?? entry?.brightness
+            // Default to 128 when missing
+            return b != null && !Number.isNaN(Number(b)) ? Number(b) : 128
+          })
+          lightSettings.brightness.splice(0, lightSettings.brightness.length, ...brightnesses)
+
+          tempDeviceStates.light = lightEntries.map(state =>
+            (state && (state.status === true || state.status === 1 || state.status === 'on')) || state === true
           )
+        } else {
+          lightSettings.brightness.splice(0, lightSettings.brightness.length)
         }
         
-        // Load AC states (ensure 3 units)
-        if (devices.deviceStates.ac) {
-          // Handle sparse array (may have null values)
-          const acStates = []
-          for (let i = 0; i < 3; i++) {
-            if (devices.deviceStates.ac[i] && devices.deviceStates.ac[i] !== null) {
-              // Has data at this index
-              acStates[i] = devices.deviceStates.ac[i].status === true || 
-                           devices.deviceStates.ac[i].status === 1 || 
-                           devices.deviceStates.ac[i].status === 'on'
-            } else {
-              // No data at this index, default to false
-              acStates[i] = false
+        // Load AC states (ใช้จำนวนจริงจาก DB)
+        if (devices.deviceStates.ac && devices.deviceStates.ac.length > 0) {
+          const acCount = devices.deviceStates.ac.length
+          const acStates = devices.deviceStates.ac.map(ac => {
+            if (ac && ac !== null) {
+              return ac.status === true || ac.status === 1 || ac.status === 'on'
             }
-          }
-          // Ensure we have exactly 3 elements
-          while (acStates.length < 3) {
-            acStates.push(false)
-          }
-          tempDeviceStates.ac = acStates.slice(0, 3)
+            return false
+          })
+          tempDeviceStates.ac = acStates
           console.log('Loaded AC states:', tempDeviceStates.ac)
           
           // Load device IDs for AC units (for Home Assistant integration)
-          for (let i = 0; i < 3; i++) {
-            if (devices.deviceStates.ac[i] && devices.deviceStates.ac[i] !== null) {
-              const ac = devices.deviceStates.ac[i]
-              if (ac.device_id || ac.deviceId) {
-                acDeviceIds.value[i] = ac.device_id || ac.deviceId
-              }
+          devices.deviceStates.ac.forEach((ac, i) => {
+            if (ac && (ac.device_id || ac.deviceId)) {
+              acDeviceIds.value[i] = ac.device_id || ac.deviceId
             }
-          }
+          })
           
-          // Load mode from settings object (if exists) - handle sparse array
-          const modes = []
-          for (let i = 0; i < 3; i++) {
-            if (devices.deviceStates.ac[i] && devices.deviceStates.ac[i] !== null) {
-              const ac = devices.deviceStates.ac[i]
-              // Try direct property first, then settings object
-              if (ac.mode) {
-                modes[i] = ac.mode
-              } else if (ac.settings && ac.settings.mode) {
-                modes[i] = ac.settings.mode
-              } else {
-                modes[i] = 'off' // default value
-              }
-            } else {
-              modes[i] = 'off' // default value for missing index
+          // Load mode from settings object
+          const modes = devices.deviceStates.ac.map(ac => {
+            if (ac && ac !== null) {
+              if (ac.mode) return ac.mode
+              if (ac.settings && ac.settings.mode) return ac.settings.mode
             }
-          }
+            return 'off'
+          })
           console.log('Loaded AC modes from API:', modes)
-          tempAcSettings.mode = modes.slice(0, 3)
+          tempAcSettings.mode = modes
           
-          // Load temperature from settings object (if exists) - handle sparse array
-          const temps = []
-          for (let i = 0; i < 3; i++) {
-            if (devices.deviceStates.ac[i] && devices.deviceStates.ac[i] !== null) {
-              const ac = devices.deviceStates.ac[i]
-              // Try direct property first, then settings object
-              if (ac.temperature !== undefined) {
-                temps[i] = ac.temperature
-              } else if (ac.settings && ac.settings.temperature !== undefined) {
-                temps[i] = ac.settings.temperature
-              } else {
-                temps[i] = 25 // default value
-              }
-            } else {
-              temps[i] = 25 // default value for missing index
+          // Load temperature from settings object
+          const temps = devices.deviceStates.ac.map(ac => {
+            if (ac && ac !== null) {
+              if (ac.temperature !== undefined) return ac.temperature
+              if (ac.settings && ac.settings.temperature !== undefined) return ac.settings.temperature
             }
-          }
+            return 25
+          })
           console.log('Loaded AC temperatures from API:', temps)
-          for (let i = 0; i < 3; i++) {
-            tempAcTemperatures[i] = temps[i]
-          }
+          tempAcTemperatures.push(...temps)
         }
         
-        // Load ERV states (ensure 3 units)
-        if (devices.deviceStates.erv) {
+        // Load ERV states (ใช้จำนวนจริงจาก DB)
+        if (devices.deviceStates.erv && devices.deviceStates.erv.length > 0) {
           console.log('=== ERV Data from API ===')
           console.log('Raw ERV data:', JSON.stringify(devices.deviceStates.erv, null, 2))
           
-          const ervStates = devices.deviceStates.erv.map(state => 
-            state.status === true || state.status === 1 || state.status === 'on'
-          )
-          // Pad to 3 units if needed
-          while (ervStates.length < 3) {
-            ervStates.push(false)
-          }
-          tempDeviceStates.erv = ervStates.slice(0, 3)
+          const ervStates = devices.deviceStates.erv.map(state => {
+            const s = state?.status ?? state
+            return s === true || s === 1 || s === 'on'
+          })
+          tempDeviceStates.erv = ervStates
           
           // Load device IDs for ERV units (for Home Assistant integration)
           devices.deviceStates.erv.forEach((erv, idx) => {
-            if (erv.device_id || erv.deviceId) {
+            if (erv && (erv.device_id || erv.deviceId)) {
               ervDeviceIds.value[idx] = erv.device_id || erv.deviceId
             }
           })
           
-          // Load speed data from settings object (fixed path)
+          // Load speed data from settings object
           const speeds = devices.deviceStates.erv.map(erv => {
-            // Check if settings exists and has speed property
-            if (erv.settings && erv.settings.speed) {
-              return erv.settings.speed
-            }
-            return 'low' // default value
+            if (erv?.settings && erv.settings.speed) return erv.settings.speed
+            return 'low'
           })
-          while (speeds.length < 3) {
-            speeds.push('low')
-          }
           console.log('✅ Loaded ERV speeds from API:', speeds)
-          tempErvSettings.speed = speeds.slice(0, 3)
+          tempErvSettings.speed = speeds
           
-          // Load mode data from settings object (fixed path)
+          // Load mode data from settings object
           const modes = devices.deviceStates.erv.map(erv => {
-            // Check if settings exists and has mode property
-            if (erv.settings && erv.settings.mode) {
-              return erv.settings.mode
-            }
-            return 'normal' // default value
+            if (erv?.settings && erv.settings.mode) return erv.settings.mode
+            return 'normal'
           })
-          while (modes.length < 3) {
-            modes.push('normal')
-          }
           console.log('✅ Loaded ERV modes from API:', modes)
-          tempErvSettings.mode = modes.slice(0, 3)
+          tempErvSettings.mode = modes
         } else {
           console.log('⚠️ No ERV data in API response')
+        }
+
+        if (devices.deviceStates.vent_fan && devices.deviceStates.vent_fan.length > 0) {
+          tempDeviceStates.vent_fan = devices.deviceStates.vent_fan.map(state => {
+            const s = state?.status ?? state
+            return s === true || s === 1 || s === 'on'
+          })
+          devices.deviceStates.vent_fan.forEach((fan, idx) => {
+            if (fan && (fan.device_id || fan.deviceId)) {
+              ventFanDeviceIds.value[idx] = fan.device_id || fan.deviceId
+            }
+          })
         }
       }
     }
@@ -927,6 +1089,7 @@ const loadRoomDevices = async () => {
   deviceStates.light.splice(0, deviceStates.light.length, ...tempDeviceStates.light)
   deviceStates.ac.splice(0, deviceStates.ac.length, ...tempDeviceStates.ac)
   deviceStates.erv.splice(0, deviceStates.erv.length, ...tempDeviceStates.erv)
+  deviceStates.vent_fan.splice(0, deviceStates.vent_fan.length, ...tempDeviceStates.vent_fan)
   
   acSettings.mode.splice(0, acSettings.mode.length, ...tempAcSettings.mode)
   acTemperatures.splice(0, acTemperatures.length, ...tempAcTemperatures)
@@ -939,21 +1102,35 @@ const loadRoomDevices = async () => {
     mode: ervSettings.mode
   })
 
-  // Update control switches based on device states
-  controls.light = deviceStates.light.some(state => state)
-  controls.ac = deviceStates.ac.some(state => state)
-  controls.erv = deviceStates.erv.some(state => state)
+  // Update control switches based on device states (รองรับ boolean และ { status })
+  const rowToBool = (s) => {
+    if (s == null) return false
+    if (typeof s === 'object') return !!s.status
+    return s === true || s === 1 || s === 'on'
+  }
+  controls.light = deviceStates.light.some(rowToBool)
+  controls.ac = deviceStates.ac.some(rowToBool)
+  controls.erv = deviceStates.erv.some(rowToBool)
+  controls.vent_fan = deviceStates.vent_fan.some(rowToBool)
 
   // Initialize CO2 chart
   initCO2Chart()
   
-  // Load device positions
-  loadDevicePositions()
+  // Load device positions — ใช้ positions จาก getDevices ถ้ามี ไม่ฉะนั้นโหลดจาก device-positions API
+  if (devicesFromApi?.positions) {
+    applyDevicePositions(devicesFromApi.positions)
+  } else {
+    await loadDevicePositions()
+  }
   
-  // Load sensor overlays for this room
-  loadSensorOverlays()
+  // Sensor overlay แบบ manual (localStorage) — ใช้เฉพาะเมื่อห้องไม่มีแถว AM319 จาก DB
+  if (devicesFromApi?.positions?.am319?.length) {
+    sensorOverlays.value = []
+  } else {
+    loadSensorOverlays()
+  }
   
-  // Start fetching AM319 sensor data
+  // ดึงค่าเซ็นเซอร์: ถ้ามี am319 ในห้อง → environmental_data ตาม room_id, ไม่เช่นนั้น → HA endpoint เดิม
   startSensorDataAutoRefresh()
 }
 
@@ -1002,6 +1179,8 @@ const toggleControl = async (type) => {
       deviceStates.ac = deviceStates.ac.map(() => newState)
     } else if (type === 'erv') {
       deviceStates.erv = deviceStates.erv.map(() => newState)
+    } else if (type === 'vent_fan') {
+      deviceStates.vent_fan = deviceStates.vent_fan.map(() => newState)
     }
   } catch (error) {
     console.error(`Error toggling ${type}:`, error)
@@ -1020,10 +1199,12 @@ const HA_LIGHT_ENTITY_ID = 'light.lights_17'
 const HA_LIGHT_DEVICE_ID = 'LIGHTS_17'
 
 // Store device IDs for AC units (mapped by index)
+const lightDeviceIds = ref({}) // { index: devices.id }
 const acDeviceIds = ref({}) // { index: deviceId }
 
 // Store device IDs for ERV units (mapped by index)
 const ervDeviceIds = ref({}) // { index: deviceId }
+const ventFanDeviceIds = ref({}) // { index: deviceId }
 
 // Sync device states from Home Assistant to DB
 const syncDeviceStatesFromHomeAssistant = async () => {
@@ -1190,53 +1371,47 @@ const controlLightViaHomeAssistant = async (action) => {
 
 // Check if device should use Home Assistant API
 // Check by device ID or by index
+/** ห้อง Mercury (HA) — ใช้ room id + ลำดับอุปกรณ์หลัง ORDER BY devices.id */
+const MERCURY_ROOM_HA_ROOM_ID = 28
+
 const shouldUseHomeAssistant = (type, index) => {
-  if (type === 'ac') {
-    // Check by device ID if available
-    const deviceId = acDeviceIds.value[index]
-    if (deviceId === HA_AIR_DEVICE_ID) {
-      return true
-    }
-    // Fallback: Use index 1 for air_02 (second AC unit)
-    return index === 1
-  }
-  
-  if (type === 'erv') {
-    // Check by device ID if available
-    const deviceId = ervDeviceIds.value[index]
-    if (deviceId === HA_ERV_DEVICE_ID) {
-      return true
-    }
-    // Fallback: Use index 0 for ERV_U1 (first ERV unit)
-    return index === 0
-  }
-  
-  if (type === 'light') {
-    // Use index 0 for light.lights_17 (first light unit in room 28)
-    // สามารถขยายได้ในอนาคตถ้ามี light หลายตัว
-    return index === 0
-  }
-  
+  if (isFloorPlanAreaDeviceModal.value) return false
+  if (selectedRoomId.value !== MERCURY_ROOM_HA_ROOM_ID) return false
+  if (type === 'ac') return index === 0
+  if (type === 'erv') return index === 0
+  // For light, rely on backend control so we can pass/remember brightness via settings
+  if (type === 'light') return false
   return false
 }
 
 const toggleDevice = async (type, index) => {
-  if (!selectedRoomId.value) return
+  // ถ้าเป็น area device ใช้ area API
+  const isAreaDevice = isFloorPlanAreaDeviceModal.value
+  const areaId = selectedAreaId.value
+
+  if (!isAreaDevice && !selectedRoomId.value) return
+  if (isAreaDevice && !areaId) return
 
   const isOn = deviceStates[type][index]
   deviceStates[type][index] = !isOn
   lastUpdateTime.value = Date.now()
 
   try {
-    // Check if this device should use Home Assistant API
-    if (shouldUseHomeAssistant(type, index)) {
+    // Check if this device should use Home Assistant API (only for room devices)
+    if (!isAreaDevice && shouldUseHomeAssistant(type, index)) {
       if (type === 'ac') {
         const action = !isOn ? 'on' : 'off'
         const temperature = acTemperatures[index] || 25
-        const hvacMode = acSettings.mode[index] || 'off'
-        // Map mode to API format
+        // When turning AC ON from icon control, default to "cool"
+        // (if mode is missing/undefined/off, otherwise respect user's selected mode)
+        if (action === 'on') {
+          const curMode = acSettings.mode[index]
+          if (curMode == null || curMode === '' || curMode === 'off') {
+            acSettings.mode[index] = 'cool'
+          }
+        }
+        const hvacMode = acSettings.mode[index] ?? 'cool'
         const apiMode = mapModeToAPI(hvacMode)
-        
         await controlAirViaHomeAssistant(action, temperature, apiMode)
       } else if (type === 'erv') {
         const action = !isOn ? 'on' : 'off'
@@ -1255,21 +1430,49 @@ const toggleDevice = async (type, index) => {
         payload.temperature = acTemperatures[index] || 25
       }
       
+      if (type === 'light' && !isOn) {
+        const brightness = getLightBrightness(index)
+        if (brightness != null && !Number.isNaN(Number(brightness))) {
+          payload.settings = { brightness: Number(brightness) }
+        }
+      }
+      
       if (type === 'erv' && ervSettings.speed[index]) {
         payload.speed = ervSettings.speed[index]
         payload.mode = ervSettings.mode[index] || 'normal'
       }
 
-      await api.post(`/rooms/${selectedRoomId.value}/devices/${type}/${index}`, payload)
+      const deviceId = type === 'ac'
+        ? acDeviceIds.value[index]
+        : type === 'erv'
+          ? ervDeviceIds.value[index]
+          : type === 'vent_fan'
+            ? ventFanDeviceIds.value[index]
+            : lightDeviceIds.value[index]
+      if (deviceId == null) {
+        throw new Error(`ไม่มี device_id สำหรับ ${type}[${index}]`)
+      }
+      if (isAreaDevice) {
+        await api.post(`/areas/${areaId}/devices/by-id/${deviceId}`, payload)
+      } else {
+        await api.post(`/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`, payload)
+      }
     }
     
-    // Update control switch
+    // Update control switch (รองรับทั้ง boolean และ object {status})
+    const toBool = (s) => {
+      if (s == null) return false
+      if (typeof s === 'object') return !!s.status
+      return s === true || s === 1 || s === 'on'
+    }
     if (type === 'light') {
-      controls.light = deviceStates.light.some(state => state)
+      controls.light = (deviceStates.light || []).some(toBool)
     } else if (type === 'ac') {
-      controls.ac = deviceStates.ac.some(state => state)
+      controls.ac = (deviceStates.ac || []).some(toBool)
     } else if (type === 'erv') {
-      controls.erv = deviceStates.erv.some(state => state)
+      controls.erv = (deviceStates.erv || []).some(toBool)
+    } else if (type === 'vent_fan') {
+      controls.vent_fan = (deviceStates.vent_fan || []).some(toBool)
     }
   } catch (error) {
     console.error(`Error toggling device:`, error)
@@ -1277,8 +1480,119 @@ const toggleDevice = async (type, index) => {
   }
 }
 
+const DEFAULT_LIGHT_BRIGHTNESS = 128
+
+const getLightBrightness = (index) => {
+  if (isFloorPlanAreaDeviceModal.value) {
+    return (
+      floorPlanAreaDeviceSettings.value?.light?.brightness?.[index] ??
+      floorPlanAreaDeviceSettings.value?.light?.brightness?.[0] ??
+      DEFAULT_LIGHT_BRIGHTNESS
+    )
+  }
+  return lightSettings.brightness[index] ?? lightSettings.brightness[0] ?? DEFAULT_LIGHT_BRIGHTNESS
+}
+
+const updateLightBrightness = async (index, brightness) => {
+  const isAreaDevice = isFloorPlanAreaDeviceModal.value
+  const areaId = selectedAreaId.value
+
+  if (!isAreaDevice && !selectedRoomId.value) return
+  if (isAreaDevice && !areaId) return
+
+  const deviceId = lightDeviceIds.value?.[index]
+  if (deviceId == null) {
+    throw new Error(`ไม่มี device_id สำหรับ light[${index}]`)
+  }
+
+  const b = Number(brightness)
+  if (Number.isNaN(b)) return
+  const nextBrightness = Math.max(1, Math.min(255, b))
+
+  const prevOn = deviceStates.light[index]
+  const prevBrightness = getLightBrightness(index)
+
+  // Update local UI state immediately
+  if (isAreaDevice) {
+    if (!floorPlanAreaDeviceSettings.value.light) {
+      floorPlanAreaDeviceSettings.value.light = { brightness: [] }
+    }
+    floorPlanAreaDeviceSettings.value.light.brightness[index] = nextBrightness
+  } else {
+    lightSettings.brightness[index] = nextBrightness
+  }
+
+  deviceStates.light[index] = true
+  controls.light = true
+  lastUpdateTime.value = Date.now()
+
+  try {
+    const payload = {
+      status: true,
+      settings: { brightness: nextBrightness },
+    }
+    const endpoint = isAreaDevice
+      ? `/areas/${areaId}/devices/by-id/${deviceId}`
+      : `/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`
+    await api.post(endpoint, payload)
+  } catch (error) {
+    console.error('Error updating light brightness:', error)
+    // Revert on error
+    deviceStates.light[index] = prevOn
+    controls.light = (deviceStates.light || []).some(s => s === true || s === 1 || s === 'on')
+    if (isAreaDevice) {
+      floorPlanAreaDeviceSettings.value.light.brightness[index] = prevBrightness
+    } else {
+      lightSettings.brightness[index] = prevBrightness
+    }
+  }
+}
+
 const getDeviceState = (type, index) => {
-  return deviceStates[type] && deviceStates[type][index] === true
+  const s = deviceStates[type]?.[index]
+  if (s == null) return false
+  if (typeof s === 'object') return !!s.status
+  return s === true || s === 1 || s === 'on'
+}
+
+/** สถานะอุปกรณ์สำหรับ icon บน floor plan area — ใช้ floorPlanAreaDeviceStates หรือ deviceStates (เมื่อ modal เปิด) */
+const getFloorPlanAreaDeviceState = (type, idx) => {
+  if (isFloorPlanAreaDeviceModal.value && deviceStates[type]?.[idx] !== undefined) {
+    const s = deviceStates[type][idx]
+    return s === true || s === 1 || s === 'on' || !!(s && typeof s === 'object' && s.status)
+  }
+  const arr = floorPlanAreaDeviceStates.value[type]
+  return !!(arr && arr[idx])
+}
+
+/** ERV speed สำหรับ floor plan area icon */
+const getFloorPlanAreaErvSpeed = (idx) => {
+  if (isFloorPlanAreaDeviceModal.value && ervSettings.speed?.[idx]) return ervSettings.speed[idx]
+  return floorPlanAreaDeviceSettings.value.erv?.speed?.[idx] || 'low'
+}
+
+/** ERV mode สำหรับ floor plan area icon */
+const getFloorPlanAreaErvMode = (idx) => {
+  if (isFloorPlanAreaDeviceModal.value && ervSettings.mode?.[idx]) return ervSettings.mode[idx]
+  return floorPlanAreaDeviceSettings.value.erv?.mode?.[idx] || 'normal'
+}
+
+/** AC mode สำหรับ floor plan area icon (getACIcon ใช้) */
+const getFloorPlanAreaACMode = (idx) => {
+  if (isFloorPlanAreaDeviceModal.value && acSettings.mode?.[idx]) return acSettings.mode[idx]
+  return floorPlanAreaDeviceSettings.value.ac?.mode?.[idx] || 'off'
+}
+
+const getFloorPlanAreaACIcon = (idx) => {
+  const mode = getFloorPlanAreaACMode(idx)
+  const icons = { 'off': 'tabler-power', 'cool': 'tabler-snowflake', 'dry': 'tabler-droplet', 'fan_only': 'tabler-wind', 'heat': 'tabler-flame', 'heat/cool': 'tabler-temperature', 'fan only': 'tabler-wind' }
+  return icons[mode] || 'tabler-snowflake'
+}
+
+const getFloorPlanAreaACModeLabel = (idx) => {
+  const mode = getFloorPlanAreaACMode(idx)
+  const labels = { 'off': 'ปิด', 'cool': 'Cool', 'dry': 'Dry', 'fan_only': 'Fan Only', 'heat': 'Heat', 'heat/cool': 'Heat/Cool', 'fan only': 'Fan Only' }
+  return labels[mode] || 'Cool'
 }
 
 const getACMode = (index) => {
@@ -1339,7 +1653,11 @@ const getErvSpeed = (index) => {
 }
 
 const updateERVSpeed = async (index, speed) => {
-  if (!selectedRoomId.value) return
+  const isAreaDevice = isFloorPlanAreaDeviceModal.value
+  const areaId = selectedAreaId.value
+  
+  if (!isAreaDevice && !selectedRoomId.value) return
+  if (isAreaDevice && !areaId) return
   
   ervSettings.speed[index] = speed
   lastUpdateTime.value = Date.now()
@@ -1347,21 +1665,24 @@ const updateERVSpeed = async (index, speed) => {
   console.log(`Updating ERV ${index} speed to:`, speed)
   
   try {
-    // Check if this device should use Home Assistant API
-    if (shouldUseHomeAssistant('erv', index)) {
-      // Map speed to level: 'low' -> 'low', 'high' -> 'high'
+    // Check if this device should use Home Assistant API (only for room devices)
+    if (!isAreaDevice && shouldUseHomeAssistant('erv', index)) {
       const level = speed === 'high' ? 'high' : 'low'
       await setErvLevelViaHomeAssistant(level)
     } else {
-      // Always update via API (regardless of on/off state) to persist settings
       const currentStatus = getDeviceState('erv', index)
       const payload = {
-        status: currentStatus, // Use current status (on/off)
+        status: currentStatus,
         speed: speed,
         mode: ervSettings.mode[index] || 'normal',
       }
       console.log('Sending ERV speed update:', payload)
-      const response = await api.post(`/rooms/${selectedRoomId.value}/devices/erv/${index}`, payload)
+      const deviceId = ervDeviceIds.value[index]
+      if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ erv[${index}]`)
+      const endpoint = isAreaDevice
+        ? `/areas/${areaId}/devices/by-id/${deviceId}`
+        : `/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`
+      const response = await api.post(endpoint, payload)
       console.log('ERV speed update response:', response.data)
     }
   } catch (error) {
@@ -1370,7 +1691,11 @@ const updateERVSpeed = async (index, speed) => {
 }
 
 const updateERVMode = async (index, mode) => {
-  if (!selectedRoomId.value) return
+  const isAreaDevice = isFloorPlanAreaDeviceModal.value
+  const areaId = selectedAreaId.value
+  
+  if (!isAreaDevice && !selectedRoomId.value) return
+  if (isAreaDevice && !areaId) return
   
   ervSettings.mode[index] = mode
   lastUpdateTime.value = Date.now()
@@ -1378,21 +1703,24 @@ const updateERVMode = async (index, mode) => {
   console.log(`Updating ERV ${index} mode to:`, mode)
   
   try {
-    // Check if this device should use Home Assistant API
-    if (shouldUseHomeAssistant('erv', index)) {
-      // Map mode: 'normal' -> 'normal', 'heat' -> 'heat'
+    // Check if this device should use Home Assistant API (only for room devices)
+    if (!isAreaDevice && shouldUseHomeAssistant('erv', index)) {
       const haMode = mode === 'heat' ? 'heat' : 'normal'
       await setErvModeViaHomeAssistant(haMode)
     } else {
-      // Always update via API (regardless of on/off state) to persist settings
       const currentStatus = getDeviceState('erv', index)
       const payload = {
-        status: currentStatus, // Use current status (on/off)
+        status: currentStatus,
         speed: ervSettings.speed[index] || 'low',
         mode: mode,
       }
       console.log('Sending ERV mode update:', payload)
-      const response = await api.post(`/rooms/${selectedRoomId.value}/devices/erv/${index}`, payload)
+      const deviceId = ervDeviceIds.value[index]
+      if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ erv[${index}]`)
+      const endpoint = isAreaDevice
+        ? `/areas/${areaId}/devices/by-id/${deviceId}`
+        : `/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`
+      const response = await api.post(endpoint, payload)
       console.log('ERV mode update response:', response.data)
     }
   } catch (error) {
@@ -1401,7 +1729,11 @@ const updateERVMode = async (index, mode) => {
 }
 
 const updateACMode = async (index, mode) => {
-  if (!selectedRoomId.value) return
+  const isAreaDevice = isFloorPlanAreaDeviceModal.value
+  const areaId = selectedAreaId.value
+  
+  if (!isAreaDevice && !selectedRoomId.value) return
+  if (isAreaDevice && !areaId) return
   
   acSettings.mode[index] = mode
   lastUpdateTime.value = Date.now()
@@ -1412,15 +1744,21 @@ const updateACMode = async (index, mode) => {
   // If AC is on, update via API
   if (getDeviceState('ac', index)) {
     try {
-      // Check if this device should use Home Assistant API
-      if (shouldUseHomeAssistant('ac', index)) {
+      // Check if this device should use Home Assistant API (only for room devices)
+      if (!isAreaDevice && shouldUseHomeAssistant('ac', index)) {
         await setAirModeViaHomeAssistant(apiMode)
       } else {
-        await api.post(`/rooms/${selectedRoomId.value}/devices/ac/${index}`, {
+        const payload = {
           status: true,
           mode: apiMode,
           temperature: acTemperatures[index] || 25,
-        })
+        }
+        const deviceId = acDeviceIds.value[index]
+        if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ ac[${index}]`)
+        const endpoint = isAreaDevice
+          ? `/areas/${areaId}/devices/by-id/${deviceId}`
+          : `/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`
+        await api.post(endpoint, payload)
       }
     } catch (error) {
       console.error('Error updating AC mode:', error)
@@ -1429,7 +1767,11 @@ const updateACMode = async (index, mode) => {
 }
 
 const updateACTemperature = async (index, temperature) => {
-  if (!selectedRoomId.value) return
+  const isAreaDevice = isFloorPlanAreaDeviceModal.value
+  const areaId = selectedAreaId.value
+  
+  if (!isAreaDevice && !selectedRoomId.value) return
+  if (isAreaDevice && !areaId) return
   
   acTemperatures[index] = temperature
   lastUpdateTime.value = Date.now()
@@ -1437,17 +1779,22 @@ const updateACTemperature = async (index, temperature) => {
   // If AC is on, update via API
   if (getDeviceState('ac', index)) {
     try {
-      // Check if this device should use Home Assistant API
-      if (shouldUseHomeAssistant('ac', index)) {
+      // Check if this device should use Home Assistant API (only for room devices)
+      if (!isAreaDevice && shouldUseHomeAssistant('ac', index)) {
         await setAirTemperatureViaHomeAssistant(temperature)
       } else {
-        // Map mode to API format
         const apiMode = mapModeToAPI(acSettings.mode[index] || 'cool')
-        await api.post(`/rooms/${selectedRoomId.value}/devices/ac/${index}`, {
+        const payload = {
           status: true,
           mode: apiMode,
           temperature: temperature,
-        })
+        }
+        const deviceId = acDeviceIds.value[index]
+        if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ ac[${index}]`)
+        const endpoint = isAreaDevice
+          ? `/areas/${areaId}/devices/by-id/${deviceId}`
+          : `/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`
+        await api.post(endpoint, payload)
       }
     } catch (error) {
       console.error('Error updating AC temperature:', error)
@@ -1467,10 +1814,49 @@ const openDeviceModal = (type, index) => {
   showDeviceModal.value = true
 }
 
-const closeDeviceModal = () => {
+const closeDeviceModal = async () => {
+  const wasFloorPlanArea = isFloorPlanAreaDeviceModal.value
   showDeviceModal.value = false
   selectedDevice.type = ''
   selectedDevice.index = -1
+  if (wasFloorPlanArea) {
+    isFloorPlanAreaDeviceModal.value = false
+    const lightDevs = floorPlanAreaDevices.value.light || []
+    const acDevs = floorPlanAreaDevices.value.ac || []
+    const ervDevs = floorPlanAreaDevices.value.erv || []
+    const ventFanDevs = floorPlanAreaDevices.value.vent_fan || []
+    const toBool = (s) => !!(s === true || s === 1 || s === 'on' || (s && s.status))
+    floorPlanAreaDeviceStates.value = {
+      light: (deviceStates.light || []).slice(0, lightDevs.length).map(toBool),
+      ac: (deviceStates.ac || []).slice(0, acDevs.length).map(toBool),
+      erv: (deviceStates.erv || []).slice(0, ervDevs.length).map(toBool),
+      vent_fan: (deviceStates.vent_fan || []).slice(0, ventFanDevs.length).map(toBool)
+    }
+    floorPlanAreaDeviceSettings.value = {
+      erv: {
+        speed: (ervSettings.speed || []).slice(0, ervDevs.length),
+        mode: (ervSettings.mode || []).slice(0, ervDevs.length)
+      },
+      ac: {
+        mode: (acSettings.mode || []).slice(0, acDevs.length),
+        temperature: (Array.isArray(acTemperatures) ? acTemperatures : []).slice(0, acDevs.length)
+      }
+    }
+    floorDeviceStates.value = {
+      light: [deviceStates.light?.some(s => s === true || s === 1 || s === 'on' || (s && s.status)) ?? false],
+      ac: [deviceStates.ac?.some(s => s === true || s === 1 || s === 'on' || (s && s.status)) ?? false],
+      erv: [deviceStates.erv?.some(s => s === true || s === 1 || s === 'on' || (s && s.status)) ?? false],
+      vent_fan: [deviceStates.vent_fan?.some(s => s === true || s === 1 || s === 'on' || (s && s.status)) ?? false]
+    }
+    selectedRoomId.value = null
+    const hasAreaDevices = lightDevs.length > 0 || acDevs.length > 0 || ervDevs.length > 0 || ventFanDevs.length > 0
+    if (hasAreaDevices) {
+      await loadAreaDeviceStates()
+    } else {
+      await checkFloorDeviceStates()
+    }
+    await loadAllRoomDeviceStates()
+  }
 }
 
 const toggleEditMode = () => {
@@ -1543,77 +1929,64 @@ const stopDrag = async () => {
   await saveDevicePositions()
 }
 
-// Load device positions from API
+// หมายเหตุ: ลบ default positions แล้ว — ใช้ตำแหน่งจาก DB โดยตรง
+// ถ้าไม่มีอุปกรณ์ใน DB จะไม่แสดงไอคอน
+
+const applyDevicePositions = (positions) => {
+  // ใช้ตำแหน่งจาก DB โดยตรง ไม่ใช้ default
+  if (positions.ac && Array.isArray(positions.ac)) {
+    devicePositions.ac = [...positions.ac]
+  }
+  if (positions.erv && Array.isArray(positions.erv)) {
+    devicePositions.erv = [...positions.erv]
+  }
+  if (positions.vent_fan && Array.isArray(positions.vent_fan)) {
+    devicePositions.vent_fan = [...positions.vent_fan]
+  }
+  if (positions.light && Array.isArray(positions.light)) {
+    devicePositions.light = [...positions.light]
+  }
+  if (positions.am319 && Array.isArray(positions.am319)) {
+    devicePositions.am319 = [...positions.am319]
+  }
+}
+
+// Load device positions from API (ใช้ตำแหน่งจาก DB โดยตรง ไม่ใช้ default)
 const loadDevicePositions = async () => {
   if (!selectedRoomId.value) return
-  
-  // Default positions (required: AC 3, ERV 3)
-  const defaultACPositions = [
-    { x: 20, y: 50 }, { x: 50, y: 50 }, { x: 80, y: 50 },
-  ]
-  const defaultERVPositions = [
-    { x: 30, y: 30 }, { x: 50, y: 30 }, { x: 70, y: 30 },
-  ]
-  const defaultLightPositions = [
-    { x: 15, y: 20 }, { x: 25, y: 20 }, { x: 35, y: 20 }, { x: 45, y: 20 },
-    { x: 55, y: 20 }, { x: 65, y: 20 }, { x: 75, y: 20 }, { x: 85, y: 20 },
-    { x: 15, y: 80 }, { x: 25, y: 80 }, { x: 35, y: 80 }, { x: 45, y: 80 },
-    { x: 55, y: 80 }, { x: 65, y: 80 },
-  ]
   
   try {
     const response = await api.get(`/rooms/${selectedRoomId.value}/device-positions`)
     if (response.data && response.data.success && response.data.data) {
       const positions = response.data.data
       
-      // Only use API positions if they meet minimum requirements
-      // AC must have 3 units
-      if (positions.ac && Array.isArray(positions.ac) && positions.ac.length >= 3) {
-        devicePositions.ac = positions.ac.slice(0, 3) // Take first 3
-      } else {
-        devicePositions.ac = [...defaultACPositions]
+      if (positions.ac && Array.isArray(positions.ac)) {
+        devicePositions.ac = positions.ac
       }
       
-      // ERV must have 3 units
-      if (positions.erv && Array.isArray(positions.erv) && positions.erv.length >= 3) {
-        devicePositions.erv = positions.erv.slice(0, 3) // Take first 3
-      } else {
-        devicePositions.erv = [...defaultERVPositions]
+      if (positions.erv && Array.isArray(positions.erv)) {
+        devicePositions.erv = positions.erv
+      }
+      if (positions.vent_fan && Array.isArray(positions.vent_fan)) {
+        devicePositions.vent_fan = positions.vent_fan
       }
       
-      // Light positions (use API if available, otherwise default)
-      if (positions.light && Array.isArray(positions.light) && positions.light.length > 0) {
+      if (positions.light && Array.isArray(positions.light)) {
         devicePositions.light = positions.light
-      } else {
-        devicePositions.light = [...defaultLightPositions]
       }
-    } else {
-      // No API data, use defaults
-      devicePositions.ac = [...defaultACPositions]
-      devicePositions.erv = [...defaultERVPositions]
-      devicePositions.light = [...defaultLightPositions]
+      
+      if (positions.am319 && Array.isArray(positions.am319)) {
+        devicePositions.am319 = positions.am319
+      }
     }
+    // ถ้าไม่มีข้อมูลจาก API ให้ใช้ array เปล่า (ไม่แสดงไอคอน)
   } catch (error) {
-    console.log('Device positions API error, using default positions:', error.message)
-    // Use default positions if API fails
-    devicePositions.ac = [...defaultACPositions]
-    devicePositions.erv = [...defaultERVPositions]
-    devicePositions.light = [...defaultLightPositions]
-  }
-  
-  // Final check to ensure minimum requirements
-  if (!devicePositions.ac || devicePositions.ac.length < 3) {
-    devicePositions.ac = [...defaultACPositions]
-  }
-  if (!devicePositions.erv || devicePositions.erv.length < 3) {
-    devicePositions.erv = [...defaultERVPositions]
-  }
-  if (!devicePositions.light || devicePositions.light.length === 0) {
-    devicePositions.light = [...defaultLightPositions]
+    console.log('Device positions API error:', error.message)
+    // ถ้า error ให้ใช้ array เปล่า (ไม่แสดงไอคอน)
   }
 }
 
-// Save device positions to API (ลง rooms.x1,y1,x2,y2 และ device_positions)
+// Save device positions to API (ลงตาราง devices ผ่าน x, y columns)
 const saveDevicePositions = async () => {
   if (!selectedRoomId.value) {
     console.warn('saveDevicePositions: ไม่มีห้องที่เลือก (selectedRoomId เป็น null)')
@@ -1623,14 +1996,24 @@ const saveDevicePositions = async () => {
   const positions = {
     erv: [...devicePositions.erv],
     ac: [...devicePositions.ac],
+    vent_fan: [...devicePositions.vent_fan],
     light: [...devicePositions.light],
+    am319: [...devicePositions.am319],
   }
   
+  console.log('กำลังบันทึกตำแหน่ง:', positions)
+  
   try {
-    await api.post(`/rooms/${selectedRoomId.value}/device-positions`, { positions })
-    console.log('บันทึกตำแหน่งสำเร็จ roomId=', selectedRoomId.value)
+    const response = await api.post(`/rooms/${selectedRoomId.value}/device-positions`, { positions })
+    console.log('บันทึกตำแหน่งสำเร็จ roomId=', selectedRoomId.value, response.data)
+    
+    // แสดงข้อความสำเร็จ
+    if (response.data && response.data.success) {
+      alert('บันทึกตำแหน่งอุปกรณ์สำเร็จ')
+    }
   } catch (error) {
     console.error('Error saving device positions:', error)
+    alert('เกิดข้อผิดพลาดในการบันทึกตำแหน่ง: ' + (error.response?.data?.message || error.message))
   }
 }
 
@@ -1645,6 +2028,41 @@ const getPM25ChipColor = (value) => {
   if (value <= 50) return 'info'
   if (value <= 100) return 'warning'
   return 'error'
+}
+
+// ดึงค่าเซ็นเซอร์จาก environmental_data ผ่าน GET /rooms/:id/environmental
+const fetchRoomEnvironmentalData = async () => {
+  if (!selectedRoomId.value || loadingSensorData.value) return
+  loadingSensorData.value = true
+  try {
+    const response = await api.get(`/rooms/${selectedRoomId.value}/environmental`)
+    const d = response.data?.data
+    if (!d) return
+    const setNum = (key, v) => {
+      if (v == null || v === '') return
+      const n = parseFloat(v)
+      if (!Number.isNaN(n) && Number.isFinite(n)) environmentalData[key] = n
+    }
+    setNum('co2', d.co2)
+    setNum('temp', d.temp)
+    setNum('noise', d.noise)
+    setNum('humidity', d.humidity)
+    setNum('pm25', d.pm25)
+    setNum('pm10', d.pm10)
+    setNum('pressure', d.pressure)
+    setNum('hcho', d.hcho)
+    setNum('tvoc', d.tvoc)
+    if (d.motion != null && d.motion !== '') environmentalData.motion = d.motion
+    if (co2ChartInstance.value && environmentalData.co2 != null) {
+      const co2Value = parseFloat(environmentalData.co2)
+      if (!Number.isNaN(co2Value) && isFinite(co2Value)) updateCO2Chart(co2Value)
+    }
+    console.log('[Sensor] Room environmental_data updated:', environmentalData)
+  } catch (error) {
+    console.warn('[Sensor] Failed to fetch room environmental data:', error)
+  } finally {
+    loadingSensorData.value = false
+  }
 }
 
 // Fetch AM319 sensor data from API
@@ -1810,14 +2228,18 @@ const startSensorDataAutoRefresh = () => {
   if (sensorDataRefreshInterval.value) {
     clearInterval(sensorDataRefreshInterval.value)
   }
-  
-  // Fetch immediately
-  fetchAm319SensorData()
-  
-  // Then fetch every 30 seconds
-  sensorDataRefreshInterval.value = setInterval(() => {
-    fetchAm319SensorData()
-  }, 30000)
+
+  const refresh = () => {
+    const hasAm319Row = devicePositions.am319 && devicePositions.am319.length > 0
+    if (hasAm319Row && selectedRoomId.value) {
+      fetchRoomEnvironmentalData()
+    } else {
+      fetchAm319SensorData()
+    }
+  }
+
+  refresh()
+  sensorDataRefreshInterval.value = setInterval(refresh, 30000)
 }
 
 // Stop auto-refresh for sensor data
@@ -1982,26 +2404,107 @@ const initCO2Chart = () => {
   })
 }
 
-const selectFloor = (buildingId, floor) => {
+const selectAreaById = (buildingId, areaId) => {
   router.push({
     name: 'rooms-control',
     query: {
       building: buildingId,
-      floor: floor,
+      area: areaId,
     },
   })
 }
 
-const selectArea = async (areaName) => {
-  // Navigate to control page with area in query (area page removed)
+const selectArea = async (areaName, areaId) => {
+  let targetAreaId = areaId ? Number(areaId) : null
+  if (typeof areaId === 'string' && areaId.startsWith('area-')) {
+    targetAreaId = parseInt(areaId.replace('area-', ''), 10)
+  }
+  let firstRoomId
+
+  // areaId อาจเป็น room.id (เมื่อ area box สร้างจาก room ที่มี x1,y1,x2,y2)
+  const roomById = targetAreaId && !isNaN(targetAreaId) ? rooms.value.find(r => Number(r.id) === targetAreaId) : null
+  if (roomById) {
+    targetAreaId = Number(selectedAreaId.value) || Number(roomById.area_id)
+    firstRoomId = Number(roomById.id)
+  } else if (targetAreaId) {
+    const areaRooms = rooms.value.filter(r => Number(r.area_id) === targetAreaId)
+    if (areaRooms.length > 0) firstRoomId = Number(areaRooms[0].id)
+  }
+
+  if (!targetAreaId && areaName) {
+    const buildingId = _toNumOrNull(selectedBuilding.value)
+    const floorNumber = _toNumOrNull(selectedFloor.value)
+    const targetArea = areas.value.find(a =>
+      _norm(a.name) === _norm(areaName)
+      && Number(a.building_id) === buildingId
+      && Number(a.floor) === floorNumber,
+    )
+    if (targetArea) {
+      targetAreaId = Number(targetArea.id)
+      const areaRooms = rooms.value.filter(r => Number(r.area_id) === targetAreaId)
+      if (areaRooms.length > 0) firstRoomId = Number(areaRooms[0].id)
+    }
+  }
+
+  if (targetAreaId == null) return
   router.push({
     name: 'rooms-control',
     query: {
       building: selectedBuilding.value,
-      floor: selectedFloor.value,
-      area: areaName,
+      area: targetAreaId,
+      ...(firstRoomId ? { room: firstRoomId } : {}),
     },
   })
+}
+
+// เปิด modal จาก floor plan area (ใช้ area API โดยตรง ไม่ต้องใช้ proxy room)
+const isFloorPlanAreaDeviceModal = ref(false)
+
+/** คลิกไอคอนอุปกรณ์ area บน floor plan → เปิด modal คอนโทรลแบบเดียวกับหน้า room */
+const handleFloorPlanDeviceClick = async (type, index) => {
+  const areaId = _toNumOrNull(selectedAreaId.value)
+  if (areaId == null) return
+  
+  // ไม่ต้องใช้ proxy room แล้ว เพราะ area devices มี API ของตัวเอง
+  selectedRoomId.value = null
+  
+  const lightDevs = floorPlanAreaDevices.value.light || []
+  const acDevs = floorPlanAreaDevices.value.ac || []
+  const ervDevs = floorPlanAreaDevices.value.erv || []
+  const ventFanDevs = floorPlanAreaDevices.value.vent_fan || []
+  const lightStates = floorPlanAreaDeviceStates.value.light || []
+  const acStates = floorPlanAreaDeviceStates.value.ac || []
+  const ervStates = floorPlanAreaDeviceStates.value.erv || []
+  const ventFanStates = floorPlanAreaDeviceStates.value.vent_fan || []
+  const areaSettings = floorPlanAreaDeviceSettings.value
+  const padArr = (arr, len, def) => [...(arr || []).slice(0, len), ...Array(Math.max(0, len - (arr || []).length)).fill(def)]
+  const ervSpeed = padArr(areaSettings.erv?.speed, ervDevs.length, 'low')
+  const ervMode = padArr(areaSettings.erv?.mode, ervDevs.length, 'normal')
+  const acMode = padArr(areaSettings.ac?.mode, acDevs.length, 'off')
+  const acTemp = padArr(areaSettings.ac?.temperature, acDevs.length, 25)
+  ervSettings.speed.splice(0, ervSettings.speed.length, ...ervSpeed)
+  ervSettings.mode.splice(0, ervSettings.mode.length, ...ervMode)
+  acSettings.mode.splice(0, acSettings.mode.length, ...acMode)
+  acTemperatures.splice(0, acTemperatures.length, ...acTemp)
+  deviceStates.light = lightDevs.length > 0 ? lightDevs.map((_, i) => lightStates[i] ?? false) : []
+  deviceStates.ac = acDevs.length > 0 ? [...acDevs.map((_, i) => acStates[i] ?? false), ...Array(Math.max(0, 3 - acDevs.length)).fill(false)].slice(0, 3) : [false, false, false]
+  deviceStates.erv = ervDevs.length > 0 ? [...ervDevs.map((_, i) => ervStates[i] ?? false), ...Array(Math.max(0, 3 - ervDevs.length)).fill(false)].slice(0, 3) : [false, false, false]
+  deviceStates.vent_fan = ventFanDevs.map((_, i) => ventFanStates[i] ?? false)
+  if (lightDevs.length > 0) devicePositions.light = lightDevs.map(d => ({ x: d.x, y: d.y }))
+  if (acDevs.length > 0) devicePositions.ac = acDevs.map(d => ({ x: d.x, y: d.y }))
+  if (ervDevs.length > 0) devicePositions.erv = ervDevs.map(d => ({ x: d.x, y: d.y }))
+  if (ventFanDevs.length > 0) devicePositions.vent_fan = ventFanDevs.map(d => ({ x: d.x, y: d.y }))
+  lightDeviceIds.value = {}
+  lightDevs.forEach((d, i) => { lightDeviceIds.value[i] = d.id })
+  acDeviceIds.value = {}
+  acDevs.forEach((d, i) => { acDeviceIds.value[i] = d.id })
+  ervDeviceIds.value = {}
+  ervDevs.forEach((d, i) => { ervDeviceIds.value[i] = d.id })
+  ventFanDeviceIds.value = {}
+  ventFanDevs.forEach((d, i) => { ventFanDeviceIds.value[i] = d.id })
+  isFloorPlanAreaDeviceModal.value = true
+  await nextTick()
+  openDeviceModal(type, index)
 }
 
 // Handle building dropdown change
@@ -2017,24 +2520,40 @@ const handleBuildingChange = async (buildingId) => {
   })
 }
 
-// Handle floor dropdown change
-const handleFloorChange = async (floor) => {
-  // Always load data from fetchBuildings (same as building list page)
+// Handle area dropdown change
+const handleAreaChange = async (areaId) => {
   await fetchBuildings()
-  
   router.push({
     name: 'rooms-control',
     query: {
       building: selectedBuilding.value,
-      floor: floor,
+      area: areaId,
     },
   })
 }
 
 // Handle room dropdown change
 const handleRoomChange = (roomId) => {
-  selectedRoomId.value = roomId
-  // Update URL with room
+  if (roomId == null && loading.value) return
+  selectedRoomId.value = roomId ? Number(roomId) : null
+
+  if (roomId && !selectedAreaId.value) {
+    const room = rooms.value.find(r => Number(r.id) === Number(roomId))
+    if (room) {
+      const areaId = Number(room.area_id ?? room.areaId)
+      if (areaId) {
+        router.push({
+          query: {
+            building: selectedBuilding.value,
+            area: areaId,
+            room: roomId,
+          },
+        })
+        return
+      }
+    }
+  }
+
   router.replace({
     query: {
       ...route.query,
@@ -2051,12 +2570,13 @@ const backToFloorPlan = () => {
     name: 'rooms-control',
     query: {
       building: selectedBuilding.value,
-      floor: selectedFloor.value,
+      area: selectedAreaId.value,
     },
   })
-  // Refresh device states when returning to floor plan
   nextTick(() => {
-    checkFloorDeviceStates()
+    const hasAreaDevices = (floorPlanAreaDevices.value.light?.length || 0) + (floorPlanAreaDevices.value.ac?.length || 0) + (floorPlanAreaDevices.value.erv?.length || 0) > 0
+    if (hasAreaDevices) loadAreaDeviceStates()
+    else checkFloorDeviceStates()
   })
 }
 
@@ -2173,26 +2693,32 @@ const stopDragArea = () => {
 }
 
 const saveFloorPlanAreas = async () => {
+  saveFloorPlanLoading.value = true
   try {
-    // Save to localStorage or API
-    const floorPlanKey = `floorPlan_${selectedBuilding.value}_${selectedFloor.value}`
-    localStorage.setItem(floorPlanKey, JSON.stringify(floorPlanAreas.value))
-    
-    // Save system control button position and size
-    const systemControlKey = `systemControl_${selectedBuilding.value}_${selectedFloor.value}`
+    const areasToSave = floorPlanAreas.value.filter(a => a.hasPositionFromDb)
+    for (const area of areasToSave) {
+      const x1 = Number(area.left)
+      const y1 = Number(area.top)
+      const x2 = Number(area.left) + Number(area.width)
+      const y2 = Number(area.top) + Number(area.height)
+      await api.put(`/rooms/${area.id}`, { x1, y1, x2, y2 })
+    }
+    if (areasToSave.length > 0) {
+      const roomsResponse = await api.get('/rooms')
+      rooms.value = roomsResponse.data.data || roomsResponse.data || []
+      await loadFloorPlanAreas()
+    }
+    const systemControlKey = `systemControl_${selectedBuilding.value}_${selectedAreaId.value}`
     localStorage.setItem(systemControlKey, JSON.stringify({
       position: systemControlPosition.value,
       size: systemControlSize.value
     }))
-    
-    // Optionally save to API
-    // await api.post(`/buildings/${selectedBuilding.value}/floors/${selectedFloor.value}/areas`, {
-    //   areas: floorPlanAreas.value
-    // })
-    
     floorPlanEditMode.value = false
   } catch (error) {
     console.error('Error saving floor plan areas:', error)
+    throw error
+  } finally {
+    saveFloorPlanLoading.value = false
   }
 }
 
@@ -2223,43 +2749,117 @@ const loadFloorPlanAreas = async () => {
       console.log(`Rooms in Building ${selectedBuilding.value}, Floor ${selectedFloor.value} (from areas.floor):`, currentFloorRooms)
     }
     
-    const floorPlanKey = `floorPlan_${selectedBuilding.value}_${selectedFloor.value}`
-    const saved = localStorage.getItem(floorPlanKey)
-    if (saved) {
-      floorPlanAreas.value = JSON.parse(saved)
+    // สร้าง area boxes จาก rooms ที่มี x1,y1,x2,y2 + virtual area เมื่อมีอุปกรณ์ area_id แต่ไม่มีห้องที่มี position
+    const roomsWithPosition = roomsWithPositionInArea.value
+    const areaId = _toNumOrNull(selectedAreaId.value)
+    const selectedAreaObj = selectedArea.value
+
+    if (roomsWithPosition.length > 0) {
+      floorPlanAreas.value = roomsWithPosition.map(room => {
+        const x1 = Number(room.x1)
+        const y1 = Number(room.y1)
+        const x2 = Number(room.x2)
+        const y2 = Number(room.y2)
+        return {
+          id: room.id,
+          name: room.name || `Room ${room.id}`,
+          icon: 'tabler-layout-grid',
+          top: y1,
+          left: x1,
+          width: Math.max(1, x2 - x1),
+          height: Math.max(1, y2 - y1),
+          hasPositionFromDb: true,
+        }
+      })
     } else {
-      // ไม่มี layout ที่บันทึกไว้ → สร้าง area boxes จาก areas ใน DB ของ building+floor นี้
-      const buildingId = Number(selectedBuilding.value)
-      const floorNum = Number(selectedFloor.value)
-      const currentFloorAreas = areas.value.filter(
-        a => Number(a.building_id ?? a.buildingId) === buildingId && Number(a.floor) === floorNum
-      )
-      if (currentFloorAreas.length > 0) {
-        const cols = 2
-        const rows = Math.ceil(currentFloorAreas.length / cols)
-        const cellW = 45
-        const cellH = Math.min(40, Math.max(25, 85 / rows))
-        const gap = 5
-        floorPlanAreas.value = currentFloorAreas.map((area, i) => {
-          const col = i % cols
-          const row = Math.floor(i / cols)
-          return {
-            id: area.id,
-            name: area.name || `Area ${area.id}`,
-            icon: 'tabler-layout-grid',
-            top: gap + row * cellH,
-            left: gap + col * (100 - gap * 2) / cols,
-            width: cellW,
-            height: cellH - 2,
+      floorPlanAreas.value = []
+    }
+
+    // โหลดอุปกรณ์ระดับ area สำหรับแสดง icon บน floor plan (ทั้งกรณีมี/ไม่มีห้องที่มี position)
+    floorPlanAreaDevices.value = { light: [], ac: [], erv: [], vent_fan: [] }
+    if (areaId != null) {
+      try {
+        const areaDevicesRes = await api.get(`/areas/${areaId}/devices`)
+        const areaDevicesData = areaDevicesRes.data?.data || areaDevicesRes.data || {}
+        const devices = areaDevicesData.devices || []
+        const resolveType = (d) => (d.device_type || d.code || (d.device_type_name ? String(d.device_type_name).toLowerCase() : null))
+        devices.forEach((d) => {
+          let t = resolveType(d)
+          if (t === 'fan' || t === 'exhaust_fan' || t === 'ventilation_fan') t = 'vent_fan'
+          if (t === 'light' || t === 'ac' || t === 'erv' || t === 'vent_fan') {
+            const x = d.x != null ? Number(d.x) : 50
+            const y = d.y != null ? Number(d.y) : 50
+            floorPlanAreaDevices.value[t].push({ id: d.id, name: d.name, x, y })
           }
         })
-      } else {
-        floorPlanAreas.value = []
+        // ใช้ deviceStates จาก area API โดยตรง (ไม่ต้องเรียก room API)
+        const ds = areaDevicesData.deviceStates || {}
+        const toBool = (s) => !!(s && (s.status === true || s.status === 1 || s.status === 'on')) || s === true
+        const lightItems = ds.light || []
+        const lightArr = (ds.light || []).map(s => toBool(s))
+        const acArr = (ds.ac || []).map(s => toBool(s))
+        const ervArr = (ds.erv || []).map(s => toBool(s))
+        const ventFanArr = (ds.vent_fan || []).map(s => toBool(s))
+        const lightDevs = floorPlanAreaDevices.value.light || []
+        const acDevs = floorPlanAreaDevices.value.ac || []
+        const ervDevs = floorPlanAreaDevices.value.erv || []
+        const ventFanDevs = floorPlanAreaDevices.value.vent_fan || []
+        if (lightDevs.length || acDevs.length || ervDevs.length || ventFanDevs.length) {
+          floorPlanAreaDeviceStates.value = {
+            light: lightDevs.map((_, i) => lightArr[i] ?? lightArr[0] ?? false),
+            ac: acDevs.map((_, i) => acArr[i] ?? acArr[0] ?? false),
+            erv: ervDevs.map((_, i) => ervArr[i] ?? ervArr[0] ?? false),
+            vent_fan: ventFanDevs.map((_, i) => ventFanArr[i] ?? ventFanArr[0] ?? false)
+          }
+          const acItems = ds.ac || []
+          const ervItems = ds.erv || []
+          const getLightBrightness = (i) => {
+            const item = lightItems[i] ?? lightItems[0]
+            const b = item?.settings?.brightness ?? item?.brightness
+            return b != null && !Number.isNaN(Number(b)) ? Number(b) : 128
+          }
+          const getAcMode = (i) => acItems[i]?.settings?.mode || acItems[i]?.mode || 'off'
+          const getAcTemp = (i) => acItems[i]?.settings?.temperature ?? acItems[i]?.temperature ?? 25
+          const getErvSpeed = (i) => ervItems[i]?.settings?.speed || ervItems[i]?.speed || 'low'
+          const getErvMode = (i) => ervItems[i]?.settings?.mode || ervItems[i]?.mode || 'normal'
+          floorPlanAreaDeviceSettings.value = {
+            light: { brightness: lightDevs.map((_, i) => getLightBrightness(i)) },
+            erv: { speed: ervDevs.map((_, i) => getErvSpeed(i)), mode: ervDevs.map((_, i) => getErvMode(i)) },
+            ac: { mode: acDevs.map((_, i) => getAcMode(i)), temperature: acDevs.map((_, i) => getAcTemp(i)) }
+          }
+          // floorDeviceStates สำหรับ allSystemsOn (เมื่อมี area devices)
+          floorDeviceStates.value = {
+            light: [lightArr.some(Boolean)],
+            ac: [acArr.some(Boolean)],
+            erv: [ervArr.some(Boolean)],
+            vent_fan: [ventFanArr.some(Boolean)]
+          }
+        }
+      } catch (e) {
+        console.warn('[Control] Failed to fetch area devices:', e?.message)
+      }
+    }
+
+    // ถ้าไม่มีห้องที่มี position แต่ area มีอุปกรณ์ area_id → เพิ่ม virtual area box สำหรับแสดง icon คอนโทรล
+    if (roomsWithPosition.length === 0 && areaId != null) {
+      const hasAreaDevices = (floorPlanAreaDevices.value.light?.length || 0) + (floorPlanAreaDevices.value.ac?.length || 0) + (floorPlanAreaDevices.value.erv?.length || 0) > 0
+      if (hasAreaDevices) {
+        const areaName = selectedAreaObj?.name || `Area ${areaId}`
+        floorPlanAreas.value = [{
+          id: `area-${areaId}`,
+          name: areaName,
+          icon: 'tabler-layout-grid',
+          top: 75,
+          left: 30,
+          width: 40,
+          height: 20,
+          hasPositionFromDb: false,
+        }]
       }
     }
 
     // Load system control button position and size
-    const systemControlKey = `systemControl_${selectedBuilding.value}_${selectedFloor.value}`
+    const systemControlKey = `systemControl_${selectedBuilding.value}_${selectedAreaId.value}`
     const savedSystemControl = localStorage.getItem(systemControlKey)
     if (savedSystemControl) {
       const data = JSON.parse(savedSystemControl)
@@ -2351,7 +2951,7 @@ const stopDragSystemControl = () => {
   document.removeEventListener('mouseup', stopDragSystemControl)
   
   // Save position and size to localStorage
-  const systemControlKey = `systemControl_${selectedBuilding.value}_${selectedFloor.value}`
+  const systemControlKey = `systemControl_${selectedBuilding.value}_${selectedAreaId.value}`
   localStorage.setItem(systemControlKey, JSON.stringify({
     position: systemControlPosition.value,
     size: systemControlSize.value
@@ -2403,7 +3003,7 @@ const stopResizeSystemControl = () => {
   document.removeEventListener('mouseup', stopResizeSystemControl)
   
   // Save position and size to localStorage
-  const systemControlKey = `systemControl_${selectedBuilding.value}_${selectedFloor.value}`
+  const systemControlKey = `systemControl_${selectedBuilding.value}_${selectedAreaId.value}`
   localStorage.setItem(systemControlKey, JSON.stringify({
     position: systemControlPosition.value,
     size: systemControlSize.value
@@ -2439,25 +3039,42 @@ const loadRoomDeviceStates = async (roomId) => {
     const states = {
       light: [],
       ac: [],
-      erv: []
+      erv: [],
+      vent_fan: [],
     }
     
     if (deviceStates.light && Array.isArray(deviceStates.light)) {
-      states.light = deviceStates.light.map(light => light.status === true || light.status === 1 || light.status === 'on')
+      states.light = deviceStates.light.map(light => {
+        const s = light?.status ?? light
+        return s === true || s === 1 || s === 'on'
+      })
     }
     
     if (deviceStates.ac && Array.isArray(deviceStates.ac)) {
-      states.ac = deviceStates.ac.map(ac => ac.status === true || ac.status === 1 || ac.status === 'on')
+      states.ac = deviceStates.ac.map(ac => {
+        const s = ac?.status ?? ac
+        return s === true || s === 1 || s === 'on'
+      })
     }
     
     if (deviceStates.erv && Array.isArray(deviceStates.erv)) {
-      states.erv = deviceStates.erv.map(erv => erv.status === true || erv.status === 1 || erv.status === 'on')
+      states.erv = deviceStates.erv.map(erv => {
+        const s = erv?.status ?? erv
+        return s === true || s === 1 || s === 'on'
+      })
+    }
+    
+    if (deviceStates.vent_fan && Array.isArray(deviceStates.vent_fan)) {
+      states.vent_fan = deviceStates.vent_fan.map(fan => {
+        const s = fan?.status ?? fan
+        return s === true || s === 1 || s === 'on'
+      })
     }
     
     roomDeviceStates.value[roomId] = states
   } catch (error) {
     console.error(`Error loading device states for room ${roomId}:`, error)
-    roomDeviceStates.value[roomId] = { light: [], ac: [], erv: [] }
+    roomDeviceStates.value[roomId] = { light: [], ac: [], erv: [], vent_fan: [] }
   } finally {
     loadingRoomStates.value[roomId] = false
   }
@@ -2475,11 +3092,58 @@ const toggleRoomSystemControl = (roomId) => {
   showSystemControlDialog.value = true
 }
 
-// Load device states for all rooms in floor plan
+// โหลดสถานะอุปกรณ์ area จาก API /areas/:id/devices เท่านั้น (ไม่เรียก room API)
+const loadAreaDeviceStates = async () => {
+  const areaId = _toNumOrNull(selectedAreaId.value)
+  const lightDevs = floorPlanAreaDevices.value.light || []
+  const acDevs = floorPlanAreaDevices.value.ac || []
+  const ervDevs = floorPlanAreaDevices.value.erv || []
+  const ventFanDevs = floorPlanAreaDevices.value.vent_fan || []
+  if (areaId == null || (!lightDevs.length && !acDevs.length && !ervDevs.length && !ventFanDevs.length)) return
+  try {
+    const res = await api.get(`/areas/${areaId}/devices`)
+    const data = res.data?.data || res.data || {}
+    const ds = data.deviceStates || {}
+    const toBool = (s) => !!(s && (s.status === true || s.status === 1 || s.status === 'on')) || s === true
+    const lightArr = (ds.light || []).map(s => toBool(s))
+    const acArr = (ds.ac || []).map(s => toBool(s))
+    const ervArr = (ds.erv || []).map(s => toBool(s))
+    const ventFanArr = (ds.vent_fan || []).map(s => toBool(s))
+    floorPlanAreaDeviceStates.value = {
+      light: lightDevs.map((_, i) => lightArr[i] ?? lightArr[0] ?? false),
+      ac: acDevs.map((_, i) => acArr[i] ?? acArr[0] ?? false),
+      erv: ervDevs.map((_, i) => ervArr[i] ?? ervArr[0] ?? false),
+      vent_fan: ventFanDevs.map((_, i) => ventFanArr[i] ?? ventFanArr[0] ?? false)
+    }
+    const acItems = ds.ac || []
+    const ervItems = ds.erv || []
+    const getAcMode = (i) => acItems[i]?.settings?.mode || acItems[i]?.mode || 'off'
+    const getAcTemp = (i) => acItems[i]?.settings?.temperature ?? acItems[i]?.temperature ?? 25
+    const getErvSpeed = (i) => ervItems[i]?.settings?.speed || ervItems[i]?.speed || 'low'
+    const getErvMode = (i) => ervItems[i]?.settings?.mode || ervItems[i]?.mode || 'normal'
+    floorPlanAreaDeviceSettings.value = {
+      erv: { speed: ervDevs.map((_, i) => getErvSpeed(i)), mode: ervDevs.map((_, i) => getErvMode(i)) },
+      ac: { mode: acDevs.map((_, i) => getAcMode(i)), temperature: acDevs.map((_, i) => getAcTemp(i)) }
+    }
+    floorDeviceStates.value = {
+      light: [lightArr.some(Boolean)],
+      ac: [acArr.some(Boolean)],
+      erv: [ervArr.some(Boolean)],
+      vent_fan: [ventFanArr.some(Boolean)]
+    }
+  } catch (e) {
+    console.warn('[Control] loadAreaDeviceStates failed:', e?.message)
+  }
+}
+
+// Load device states for all rooms in floor plan (สำหรับปุ่มเปิด/ปิดแต่ละห้อง)
 const loadAllRoomDeviceStates = async () => {
   const roomIds = Object.values(areaRoomsMap.value).map(room => room.id)
   await Promise.all(roomIds.map(roomId => loadRoomDeviceStates(roomId)))
-  // Load button positions for all rooms
+  const hasAreaDevices = (floorPlanAreaDevices.value.light?.length || 0) + (floorPlanAreaDevices.value.ac?.length || 0) + (floorPlanAreaDevices.value.erv?.length || 0) > 0
+  if (hasAreaDevices) {
+    await loadAreaDeviceStates()
+  }
   loadRoomControlPositions()
 }
 
@@ -2509,9 +3173,9 @@ const stopRoomStatesAutoRefresh = () => {
 
 // Load room control button positions from localStorage
 const loadRoomControlPositions = () => {
-  if (!selectedBuilding.value || !selectedFloor.value) return
-  
-  const key = `roomControlPositions_${selectedBuilding.value}_${selectedFloor.value}`
+  if (!selectedBuilding.value || !selectedAreaId.value) return
+
+  const key = `roomControlPositions_${selectedBuilding.value}_${selectedAreaId.value}`
   const saved = localStorage.getItem(key)
   
   // Initialize default positions based on zones
@@ -2562,9 +3226,9 @@ const loadRoomControlPositions = () => {
 
 // Save room control button positions to localStorage
 const saveRoomControlPositions = () => {
-  if (!selectedBuilding.value || !selectedFloor.value) return
-  
-  const key = `roomControlPositions_${selectedBuilding.value}_${selectedFloor.value}`
+  if (!selectedBuilding.value || !selectedAreaId.value) return
+
+  const key = `roomControlPositions_${selectedBuilding.value}_${selectedAreaId.value}`
   localStorage.setItem(key, JSON.stringify(roomControlPositions.value))
 }
 
@@ -2674,10 +3338,11 @@ const checkFloorDeviceStates = async () => {
   try {
     const buildingId = selectedBuilding.value
     const floorNumber = selectedFloor.value
-    const areaName = selectedArea.value
-    
-    if (!buildingId || !floorNumber) {
-      floorDeviceStates.value = { light: [], ac: [], erv: [] }
+    const areaId = selectedAreaId.value
+    const areaName = selectedArea.value?.name
+
+    if (!buildingId) {
+      floorDeviceStates.value = { light: [], ac: [], erv: [], vent_fan: [] }
       return
     }
     
@@ -2716,27 +3381,16 @@ const checkFloorDeviceStates = async () => {
     // ข้อมูล floor ดึงจากตาราง areas คอลัมน์ floor เท่านั้น
     const buildingIdStr = String(buildingId)
     const floorNumberStr = String(floorNumber)
-    const currentFloorAreaIds = areas.value
-      .filter(a => String(a.building_id) === buildingIdStr && String(a.floor) === floorNumberStr)
-      .map(a => a.id)
-    let targetRooms = allRooms.filter(room => currentFloorAreaIds.includes(room.area_id))
-    
-    console.log(`Found ${targetRooms.length} rooms in Building ${buildingId}, Floor ${floorNumber} (from areas.floor) (before area filter)`)
-    
-    if (areaName) {
-      const targetArea = areas.value.find(a => {
-        const areaBuildingId = String(a.building_id)
-        const areaFloor = String(a.floor)
-        return a.name === areaName && areaBuildingId === buildingIdStr && areaFloor === floorNumberStr
-      })
-      if (targetArea) {
-        targetRooms = targetRooms.filter(room => room.area_id === targetArea.id)
-        console.log(`Filtered to ${targetRooms.length} rooms in Area ${areaName} (ID: ${targetArea.id})`)
-      } else {
-        console.warn(`Area "${areaName}" not found in Building ${buildingId}, Floor ${floorNumber}`)
-      }
+    let targetRooms
+    if (areaId != null) {
+      targetRooms = allRooms.filter(room => Number(room.area_id) === Number(areaId))
+      console.log(`Found ${targetRooms.length} rooms in Area ID ${areaId} (${areaName || ''})`)
     } else {
-      console.log(`No area filter - checking all ${targetRooms.length} rooms in floor`)
+      const currentFloorAreaIds = areas.value
+        .filter(a => String(a.building_id) === buildingIdStr && String(a.floor) === floorNumberStr)
+        .map(a => a.id)
+      targetRooms = allRooms.filter(room => currentFloorAreaIds.includes(room.area_id))
+      console.log(`Found ${targetRooms.length} rooms in Building ${buildingId}, Floor ${floorNumber} (from areas.floor)`)
     }
     
     console.log(`Checking device states for ${targetRooms.length} rooms in Building ${buildingId}, Floor ${floorNumber}${areaName ? `, Area ${areaName}` : ''}`)
@@ -2749,31 +3403,32 @@ const checkFloorDeviceStates = async () => {
         const devices = devicesResponse.data.data || devicesResponse.data || {}
         const deviceStates = devices.deviceStates || {}
         console.log(`Room ${room.id} (${room.name}) device states:`, {
-          light: deviceStates.light?.map(l => ({ status: l.status, raw: l })),
-          ac: deviceStates.ac?.map(a => ({ status: a.status, raw: a })),
-          erv: deviceStates.erv?.map(e => ({ status: e.status, raw: e }))
+          light: deviceStates.light?.map(l => ({ status: l?.status, raw: l })),
+          ac: deviceStates.ac?.map(a => ({ status: a?.status, raw: a })),
+          erv: deviceStates.erv?.map(e => ({ status: e?.status, raw: e })),
+          vent_fan: deviceStates.vent_fan?.map(f => ({ status: f?.status, raw: f })),
         })
         
         // Debug: Show actual status values
         if (deviceStates.light) {
-          const lightStatuses = deviceStates.light.map(l => l.status)
+          const lightStatuses = deviceStates.light.map(l => l?.status)
           console.log(`  Light actual statuses:`, lightStatuses)
           console.log(`  Light has any ON:`, lightStatuses.some(s => s === true || s === 1 || s === 'on'))
         }
         if (deviceStates.ac) {
-          const acStatuses = deviceStates.ac.map(a => a.status)
+          const acStatuses = deviceStates.ac.map(a => a?.status)
           console.log(`  AC actual statuses:`, acStatuses)
           console.log(`  AC has any ON:`, acStatuses.some(s => s === true || s === 1 || s === 'on'))
         }
         if (deviceStates.erv) {
-          const ervStatuses = deviceStates.erv.map(e => e.status)
+          const ervStatuses = deviceStates.erv.map(e => e?.status)
           console.log(`  ERV actual statuses:`, ervStatuses)
           console.log(`  ERV has any ON:`, ervStatuses.some(s => s === true || s === 1 || s === 'on'))
         }
         return deviceStates
       } catch (error) {
         console.error(`Error fetching devices for room ${room.id}:`, error)
-        return { light: [], ac: [], erv: [] }
+        return { light: [], ac: [], erv: [], vent_fan: [] }
       }
     })
     
@@ -2783,19 +3438,22 @@ const checkFloorDeviceStates = async () => {
     const aggregatedStates = {
       light: [],
       ac: [],
-      erv: []
+      erv: [],
+      vent_fan: []
     }
     
     // Check if any device is on across all rooms
     let hasAnyLightOn = false
     let hasAnyAcOn = false
     let hasAnyErvOn = false
+    let hasAnyVentFanOn = false
     
     allDeviceStates.forEach(roomStates => {
       // Check light devices
       if (roomStates.light && Array.isArray(roomStates.light)) {
         const hasLightOn = roomStates.light.some(light => {
-          return light.status === true || light.status === 1 || light.status === 'on'
+          const s = light?.status ?? light
+          return s === true || s === 1 || s === 'on'
         })
         hasAnyLightOn = hasAnyLightOn || hasLightOn
       }
@@ -2803,7 +3461,8 @@ const checkFloorDeviceStates = async () => {
       // Check AC devices
       if (roomStates.ac && Array.isArray(roomStates.ac)) {
         const hasAcOn = roomStates.ac.some(ac => {
-          return ac.status === true || ac.status === 1 || ac.status === 'on'
+          const s = ac?.status ?? ac
+          return s === true || s === 1 || s === 'on'
         })
         hasAnyAcOn = hasAnyAcOn || hasAcOn
       }
@@ -2811,9 +3470,18 @@ const checkFloorDeviceStates = async () => {
       // Check ERV devices
       if (roomStates.erv && Array.isArray(roomStates.erv)) {
         const hasErvOn = roomStates.erv.some(erv => {
-          return erv.status === true || erv.status === 1 || erv.status === 'on'
+          const s = erv?.status ?? erv
+          return s === true || s === 1 || s === 'on'
         })
         hasAnyErvOn = hasAnyErvOn || hasErvOn
+      }
+      
+      if (roomStates.vent_fan && Array.isArray(roomStates.vent_fan)) {
+        const hasVentFanOn = roomStates.vent_fan.some(fan => {
+          const s = fan?.status ?? fan
+          return s === true || s === 1 || s === 'on'
+        })
+        hasAnyVentFanOn = hasAnyVentFanOn || hasVentFanOn
       }
     })
     
@@ -2821,15 +3489,39 @@ const checkFloorDeviceStates = async () => {
     aggregatedStates.light = [hasAnyLightOn]
     aggregatedStates.ac = [hasAnyAcOn]
     aggregatedStates.erv = [hasAnyErvOn]
+    aggregatedStates.vent_fan = [hasAnyVentFanOn]
     
     floorDeviceStates.value = aggregatedStates
+    // Init floorPlanAreaDeviceStates จาก floorDeviceStates เมื่อมี area devices และยังไม่มีข้อมูล
+    const lightDevs = floorPlanAreaDevices.value.light || []
+    const acDevs = floorPlanAreaDevices.value.ac || []
+    const ervDevs = floorPlanAreaDevices.value.erv || []
+    const ventFanDevs = floorPlanAreaDevices.value.vent_fan || []
+    const hasLight = aggregatedStates.light?.[0] ?? false
+    const hasAc = aggregatedStates.ac?.[0] ?? false
+    const hasErv = aggregatedStates.erv?.[0] ?? false
+    const hasVentFan = aggregatedStates.vent_fan?.[0] ?? false
+    const needInit = lightDevs.length > 0 || acDevs.length > 0 || ervDevs.length > 0 || ventFanDevs.length > 0
+    const current = floorPlanAreaDeviceStates.value
+    const lightLen = (current.light || []).length
+    const acLen = (current.ac || []).length
+    const ervLen = (current.erv || []).length
+    const ventFanLen = (current.vent_fan || []).length
+    if (needInit && (lightLen < lightDevs.length || acLen < acDevs.length || ervLen < ervDevs.length || ventFanLen < ventFanDevs.length)) {
+      floorPlanAreaDeviceStates.value = {
+        light: lightDevs.map(() => hasLight),
+        ac: acDevs.map(() => hasAc),
+        erv: ervDevs.map(() => hasErv),
+        vent_fan: ventFanDevs.map(() => hasVentFan)
+      }
+    }
     console.log('Floor device states:', floorDeviceStates.value)
-    console.log(`Has any device on - Light: ${hasAnyLightOn}, AC: ${hasAnyAcOn}, ERV: ${hasAnyErvOn}`)
-    console.log('allSystemsOn will be:', hasAnyLightOn || hasAnyAcOn || hasAnyErvOn)
+    console.log(`Has any device on - Light: ${hasAnyLightOn}, AC: ${hasAnyAcOn}, ERV: ${hasAnyErvOn}, VentFan: ${hasVentFan}`)
+    console.log('allSystemsOn will be:', hasAnyLightOn || hasAnyAcOn || hasAnyErvOn || hasVentFan)
     console.log('Total rooms checked:', targetRooms.length)
   } catch (error) {
     console.error('Error checking floor device states:', error)
-    floorDeviceStates.value = { light: [], ac: [], erv: [] }
+    floorDeviceStates.value = { light: [], ac: [], erv: [], vent_fan: [] }
   }
 }
 
@@ -2841,14 +3533,13 @@ const confirmSystemControl = async () => {
   try {
     const buildingId = selectedBuilding.value
     const floorNumber = selectedFloor.value
-    const areaName = selectedArea.value
+    const areaId = selectedAreaId.value
+    const areaName = selectedArea.value?.name
     const isTurningOn = systemControlAction.value === 'turnOn'
-    
+
     let targetRooms = []
-    
-    // If specific room is targeted, control only that room
+
     if (systemControlTargetRoomId.value) {
-      // Find the specific room from areaRoomsMap
       const targetRoom = Object.values(areaRoomsMap.value).find(room => room?.id === systemControlTargetRoomId.value)
       if (targetRoom) {
         targetRooms = [targetRoom]
@@ -2857,23 +3548,17 @@ const confirmSystemControl = async () => {
         console.warn(`Target room with ID ${systemControlTargetRoomId.value} not found`)
       }
     } else {
-      // Otherwise, control all rooms in building/floor/area
-      // ข้อมูล floor จากตาราง areas คอลัมน์ floor เท่านั้น
       const response = await api.get('/rooms')
       const allRooms = response.data.data || response.data || []
-      const currentFloorAreaIds = areas.value
-        .filter(a => Number(a.building_id) === Number(buildingId) && Number(a.floor) === Number(floorNumber))
-        .map(a => a.id)
-      targetRooms = allRooms.filter(room => currentFloorAreaIds.includes(room.area_id))
-      
-      if (areaName) {
-        const targetArea = areas.value.find(a => a.name === areaName && a.building_id == buildingId && a.floor == floorNumber)
-        if (targetArea) {
-          targetRooms = targetRooms.filter(room => room.area_id === targetArea.id)
-        }
+      if (areaId != null) {
+        targetRooms = allRooms.filter(room => Number(room.area_id) === Number(areaId))
+      } else {
+        const currentFloorAreaIds = areas.value
+          .filter(a => Number(a.building_id) === Number(buildingId) && Number(a.floor) === Number(floorNumber))
+          .map(a => a.id)
+        targetRooms = allRooms.filter(room => currentFloorAreaIds.includes(room.area_id))
       }
-      
-      console.log(`Found ${targetRooms.length} rooms in Building ${buildingId}, Floor ${floorNumber} (from areas.floor)${areaName ? `, Area ${areaName}` : ''}`)
+      console.log(`Found ${targetRooms.length} rooms in Building ${buildingId}${areaId != null ? `, Area ${areaId} (${areaName || ''})` : `, Floor ${floorNumber}`}`)
     }
     
     // Control all systems (light, ac, erv) for each room
@@ -2960,6 +3645,13 @@ const confirmSystemControl = async () => {
     // Refresh device states for all rooms in floor plan
     console.log('Refreshing room device states...')
     await loadAllRoomDeviceStates()
+
+    // If currently viewing a specific room, reload its device states too.
+    // Otherwise the control panel (VSwitch) can stay stale even if HA/DB changed.
+    if (selectedRoomId.value) {
+      console.log('Reloading selected room device states...')
+      await loadRoomDevices()
+    }
     
     // Close all dialogs
     closeConfirmSystemControlDialog()
@@ -2975,7 +3667,12 @@ const confirmSystemControl = async () => {
 watch(selectedRoomId, () => {
   if (selectedRoomId.value) {
     loadRoomDevices()
+    loadEnergyData()
   }
+})
+
+watch(energyPeriod, () => {
+  if (energyPeriod.value !== 'custom') loadEnergyData()
 })
 
 watch(() => route.query, async () => {
@@ -2984,60 +3681,50 @@ watch(() => route.query, async () => {
   console.log('showRoomControl:', showRoomControl.value)
   
   if (showBuildingList.value) {
+    selectedRoomId.value = null
     await fetchBuildings()
   } else if (showRoomControl.value) {
     await fetchBuildings()
     
     const resolvedRoomId = resolveRoomIdFromQuery()
     if (resolvedRoomId) {
-      if (selectedRoomId.value !== resolvedRoomId) {
-        selectedRoomId.value = resolvedRoomId
+      const numId = Number(resolvedRoomId)
+      if (selectedRoomId.value !== numId) {
+        selectedRoomId.value = numId
         await nextTick()
       }
-    } else if (selectedArea.value) {
-      const targetArea = areas.value.find(a => {
-        const areaBuildingId = String(a.building_id)
-        const areaFloor = String(a.floor)
-        const buildingIdStr = String(selectedBuilding.value)
-        const floorNumberStr = String(selectedFloor.value)
-        return a.name === selectedArea.value && areaBuildingId === buildingIdStr && areaFloor === floorNumberStr
-      })
-      
-      if (targetArea) {
-        const areaRooms = rooms.value.filter(room => Number(room.area_id) === Number(targetArea.id))
-        if (areaRooms.length > 0) {
-          const currentRoomInArea = areaRooms.find(r => Number(r.id) === Number(selectedRoomId.value))
-          if (!currentRoomInArea) {
-            const firstRoomId = areaRooms[0].id
-            selectedRoomId.value = firstRoomId
-            router.replace({
-              query: {
-                ...route.query,
-                room: firstRoomId,
-              },
-            })
-            await nextTick()
-          }
+    } else if (selectedAreaId.value && selectedArea.value) {
+      const areaRooms = roomsWithPositionInArea.value
+      if (areaRooms.length > 0) {
+        const currentRoomInArea = areaRooms.find(r => Number(r.id) === Number(selectedRoomId.value))
+        if (!currentRoomInArea) {
+          const firstRoomId = Number(areaRooms[0].id)
+          selectedRoomId.value = firstRoomId
+          router.replace({
+            query: { ...route.query, room: firstRoomId },
+          })
+          await nextTick()
         }
       } else {
         const fallbackRoomId = resolveRoomIdFromAreaOnly()
         if (fallbackRoomId) {
-          selectedRoomId.value = fallbackRoomId
+          selectedRoomId.value = Number(fallbackRoomId)
           await nextTick()
         }
       }
     }
+
   } else if (showFloorPlan.value) {
-    // Load data from fetchBuildings (same as building list page) for dropdown
+    selectedRoomId.value = null
     await fetchBuildings()
     await loadFloorPlanAreas()
     // Use nextTick to ensure DOM is ready
     await nextTick()
-    console.log('Calling checkFloorDeviceStates from watch...')
-    await checkFloorDeviceStates()
-    // Load device states for all rooms in floor plan
+    const hasAreaDevices = (floorPlanAreaDevices.value.light?.length || 0) + (floorPlanAreaDevices.value.ac?.length || 0) + (floorPlanAreaDevices.value.erv?.length || 0) > 0
+    if (!hasAreaDevices) {
+      await checkFloorDeviceStates()
+    }
     await loadAllRoomDeviceStates()
-    // Start auto-refresh for room states
     startRoomStatesAutoRefresh()
   } else {
     // Stop auto-refresh when not in floor plan view
@@ -3064,62 +3751,7 @@ const fetchDeviceTypes = async () => {
 }
 
 onMounted(async () => {
-  console.log('Component mounted')
-  console.log('showFloorPlan:', showFloorPlan.value)
-
   fetchDeviceTypes()
-
-  if (showBuildingList.value) {
-    await fetchBuildings()
-  } else if (showRoomControl.value) {
-    await fetchBuildings()
-    
-    const resolvedRoomId = resolveRoomIdFromQuery()
-    if (resolvedRoomId) {
-      selectedRoomId.value = resolvedRoomId
-      await nextTick()
-    } else if (selectedArea.value) {
-      const targetArea = areas.value.find(a => {
-        const areaBuildingId = String(a.building_id)
-        const areaFloor = String(a.floor)
-        const buildingIdStr = String(selectedBuilding.value)
-        const floorNumberStr = String(selectedFloor.value)
-        return a.name === selectedArea.value && areaBuildingId === buildingIdStr && areaFloor === floorNumberStr
-      })
-      
-      if (targetArea) {
-        const areaRooms = rooms.value.filter(room => Number(room.area_id) === Number(targetArea.id))
-        if (areaRooms.length > 0) {
-          const currentRoomInArea = areaRooms.find(r => Number(r.id) === Number(selectedRoomId.value))
-          if (!currentRoomInArea) {
-            const firstRoomId = areaRooms[0].id
-            selectedRoomId.value = firstRoomId
-            router.replace({
-              query: {
-                ...route.query,
-                room: firstRoomId,
-              },
-            })
-            await nextTick()
-          }
-        }
-      } else {
-        const fallbackRoomId = resolveRoomIdFromAreaOnly()
-        if (fallbackRoomId) {
-          selectedRoomId.value = fallbackRoomId
-          await nextTick()
-        }
-      }
-    }
-  } else if (showFloorPlan.value) {
-    await fetchBuildings()
-    await loadFloorPlanAreas()
-    await nextTick()
-    console.log('Calling checkFloorDeviceStates from onMounted...')
-    await checkFloorDeviceStates()
-    await loadAllRoomDeviceStates()
-    startRoomStatesAutoRefresh()
-  }
 })
 
 onBeforeUnmount(() => {
@@ -3206,15 +3838,15 @@ onBeforeUnmount(() => {
             
             <VCardText>
               <div class="text-body-2 text-disabled mb-3">
-                {{ building.floors?.length || 0 }} ชั้น
+                {{ getAreasForBuilding(building.id).length }} โซน
               </div>
               
               <div class="floors-list">
                 <div
-                  v-for="floor in building.floors"
-                  :key="floor.floor"
+                  v-for="area in getAreasForBuilding(building.id)"
+                  :key="area.id"
                   class="floor-item"
-                  @click="selectFloor(building.id, floor.floor)"
+                  @click="selectAreaById(building.id, area.id)"
                 >
                   <VIcon
                     icon="tabler-layers"
@@ -3222,14 +3854,14 @@ onBeforeUnmount(() => {
                     color="primary"
                     class="me-2"
                   />
-                  <span class="floor-label">Floor {{ floor.floor }}</span>
+                  <span class="floor-label">{{ area.name || `Area ${area.id}` }}</span>
                   <VSpacer />
                   <VChip
                     size="small"
                     color="primary"
                     variant="tonal"
                   >
-                    {{ floor.count }} Room{{ floor.count > 1 ? 's' : '' }}
+                    {{ getRoomCountInArea(area.id) }} Room{{ getRoomCountInArea(area.id) !== 1 ? 's' : '' }}
                   </VChip>
                   <VIcon
                     icon="tabler-chevron-right"
@@ -3239,7 +3871,7 @@ onBeforeUnmount(() => {
                 </div>
                 
                 <div
-                  v-if="!building.floors || building.floors.length === 0"
+                  v-if="getAreasForBuilding(building.id).length === 0"
                   class="text-center py-4 text-disabled"
                 >
                   <VIcon
@@ -3247,7 +3879,7 @@ onBeforeUnmount(() => {
                     size="20"
                     class="me-1"
                   />
-                  ไม่มีห้องในอาคารนี้
+                  ไม่มีโซนในอาคารนี้
                 </div>
               </div>
             </VCardText>
@@ -3308,18 +3940,23 @@ onBeforeUnmount(() => {
                   md="4"
                 >
                   <VSelect
-                    v-model="selectedFloor"
-                    :items="availableFloors"
+                    v-model="selectedAreaId"
+                    :items="availableAreas"
                     item-title="title"
                     item-value="value"
-                    label="เลือกชั้น"
+                    label="เลือกโซน (Area)"
                     density="compact"
                     variant="outlined"
                     :disabled="!selectedBuilding"
-                    @update:model-value="handleFloorChange"
-                  />
+                    @update:model-value="handleAreaChange"
+                  >
+                    <template #selection>
+                      {{ selectedAreaDisplayName || selectedAreaId }}
+                    </template>
+                  </VSelect>
                 </VCol>
                 <VCol
+                  v-if="selectedAreaId"
                   cols="12"
                   md="4"
                 >
@@ -3331,7 +3968,7 @@ onBeforeUnmount(() => {
                     label="เลือกห้อง"
                     density="compact"
                     variant="outlined"
-                    :disabled="!selectedBuilding || !selectedFloor"
+                    :disabled="!selectedBuilding || !selectedAreaId"
                     clearable
                     @update:model-value="handleRoomChange"
                   >
@@ -3359,7 +3996,7 @@ onBeforeUnmount(() => {
                     />
                     <div>
                       <h4 class="text-h4 mb-0">
-                        Floor Plan • Floor {{ selectedFloor }}
+                        Floor Plan • {{ selectedAreaDisplayName }}
                       </h4>
                       <div class="text-caption text-disabled">
                         <span v-if="!floorPlanEditMode">คลิกที่ Area เพื่อควบคุมห้อง</span>
@@ -3391,6 +4028,8 @@ onBeforeUnmount(() => {
                       color="primary"
                       variant="elevated"
                       prepend-icon="tabler-device-floppy"
+                      :loading="saveFloorPlanLoading"
+                      :disabled="saveFloorPlanLoading"
                       @click="saveFloorPlanAreas"
                     >
                       บันทึก
@@ -3423,15 +4062,15 @@ onBeforeUnmount(() => {
                   class="floor-plan-image"
                 />
                 
-                <!-- Areas Overlay -->
+                <!-- Areas Overlay — แสดง area-box ที่มี x1,y1,x2,y2 จาก DB หรือ virtual area (อุปกรณ์ area_id) -->
                 <div class="areas-overlay">
                   <div
-                    v-for="area in floorPlanAreas"
+                    v-for="area in floorPlanAreas.filter(a => a.hasPositionFromDb || (typeof a.id === 'string' && a.id.startsWith('area-')))"
                     :key="area.id"
                     class="area-box"
                     :class="{
                       'area-box-clickable': !floorPlanEditMode,
-                      'area-box-editing': floorPlanEditMode,
+                      'area-box-editing': floorPlanEditMode && !(typeof area.id === 'string' && area.id.startsWith('area-')),
                     }"
                     :style="{
                       top: area.top + '%',
@@ -3439,12 +4078,12 @@ onBeforeUnmount(() => {
                       width: area.width + '%',
                       height: area.height + '%',
                     }"
-                    @click="!floorPlanEditMode && selectArea(area.name)"
-                    @mousedown="floorPlanEditMode && startDragArea($event, area.id)"
+                    @click="!floorPlanEditMode && selectArea(area.name, area.id)"
+                    @mousedown="floorPlanEditMode && !(typeof area.id === 'string' && area.id.startsWith('area-')) && startDragArea($event, area.id)"
                   >
-                    <!-- Resize Handle -->
+                    <!-- Resize Handle (ซ่อนสำหรับ virtual area) -->
                     <div
-                      v-if="floorPlanEditMode"
+                      v-if="floorPlanEditMode && !(typeof area.id === 'string' && area.id.startsWith('area-'))"
                       class="area-resize-handle"
                       @mousedown.stop="startResizeArea($event, area.id)"
                     >
@@ -3454,9 +4093,9 @@ onBeforeUnmount(() => {
                       />
                     </div>
                     
-                    <!-- Delete Button -->
+                    <!-- Delete Button (ซ่อนสำหรับ virtual area) -->
                     <VBtn
-                      v-if="floorPlanEditMode"
+                      v-if="floorPlanEditMode && !(typeof area.id === 'string' && area.id.startsWith('area-'))"
                       icon
                       size="x-small"
                       color="error"
@@ -3470,7 +4109,7 @@ onBeforeUnmount(() => {
                     <!-- Area Label -->
                     <div class="area-label">
                       <div
-                        v-if="floorPlanEditMode && editingAreaName === area.id"
+                        v-if="floorPlanEditMode && !(typeof area.id === 'string' && area.id.startsWith('area-')) && editingAreaName === area.id"
                         class="area-name-edit"
                       >
                         <VTextField
@@ -3487,12 +4126,12 @@ onBeforeUnmount(() => {
                       <div
                         v-else
                         class="text-h6 font-weight-bold area-name-display"
-                        :class="{ 'area-name-editable': floorPlanEditMode }"
-                        @dblclick="floorPlanEditMode && startEditAreaName(area.id)"
+                        :class="{ 'area-name-editable': floorPlanEditMode && !(typeof area.id === 'string' && area.id.startsWith('area-')) }"
+                        @dblclick="floorPlanEditMode && !(typeof area.id === 'string' && area.id.startsWith('area-')) && startEditAreaName(area.id)"
                       >
                         {{ areaRoomsMap[area.id]?.name || area.name }}
                         <VIcon
-                          v-if="floorPlanEditMode"
+                          v-if="floorPlanEditMode && !(typeof area.id === 'string' && area.id.startsWith('area-'))"
                           icon="tabler-pencil"
                           size="14"
                           class="ms-1 area-edit-icon"
@@ -3516,6 +4155,73 @@ onBeforeUnmount(() => {
                       >
                         {{ isRoomSystemsOn(areaRoomsMap[area.id].id) ? 'เปิด' : 'ปิด' }}
                       </VBtn>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Area Device Icons Overlay — แสดง icon ไฟ/แอร์/ERV บน floor plan ตามตำแหน่ง x,y จากอุปกรณ์ area_id -->
+                <div class="floor-plan-devices-overlay">
+                  <div
+                    v-for="(dev, idx) in floorPlanAreaDevices.light"
+                    :key="'light-' + dev.id"
+                    class="device-icon light-icon floor-plan-device-icon"
+                    :class="{ active: getFloorPlanAreaDeviceState('light', idx) }"
+                    :style="{ left: dev.x + '%', top: dev.y + '%' }"
+                    :title="getFloorPlanAreaDeviceState('light', idx) ? 'ไฟ: เปิด' : 'ไฟ: ปิด'"
+                    @click.stop="handleFloorPlanDeviceClick('light', idx)"
+                  >
+                    <div class="icon-circle">
+                      <VIcon icon="tabler-bulb" />
+                    </div>
+                  </div>
+                  <div
+                    v-for="(dev, idx) in floorPlanAreaDevices.ac"
+                    :key="'ac-' + dev.id"
+                    class="device-icon ac-icon floor-plan-device-icon"
+                    :class="{ active: getFloorPlanAreaDeviceState('ac', idx) }"
+                    :style="{ left: dev.x + '%', top: dev.y + '%' }"
+                    :title="getFloorPlanAreaDeviceState('ac', idx) ? `แอร์: เปิด (${getFloorPlanAreaACModeLabel(idx)})` : 'แอร์: ปิด'"
+                    @click.stop="handleFloorPlanDeviceClick('ac', idx)"
+                  >
+                    <div class="icon-circle">
+                      <VIcon :icon="getFloorPlanAreaACIcon(idx)" />
+                      <span class="icon-label">A/C</span>
+                    </div>
+                  </div>
+                  <div
+                    v-for="(dev, idx) in floorPlanAreaDevices.erv"
+                    :key="'erv-' + dev.id"
+                    class="device-icon erv-icon floor-plan-device-icon"
+                    :class="{
+                      'active': getFloorPlanAreaDeviceState('erv', idx),
+                      'rotating': getFloorPlanAreaDeviceState('erv', idx),
+                      'rotating-high': getFloorPlanAreaDeviceState('erv', idx) && getFloorPlanAreaErvSpeed(idx) === 'high',
+                    }"
+                    :style="{ left: dev.x + '%', top: dev.y + '%' }"
+                    :title="getFloorPlanAreaDeviceState('erv', idx) ? 'ERV: เปิด' : 'ERV: ปิด'"
+                    @click.stop="handleFloorPlanDeviceClick('erv', idx)"
+                  >
+                    <div class="icon-circle">
+                      <img :src="fanImage" alt="ERV" class="erv-fan-icon" />
+                    </div>
+                    <!-- Mode Badge (เหมือนหน้า room) -->
+                    <div
+                      v-if="getFloorPlanAreaDeviceState('erv', idx)"
+                      class="erv-mode-badge"
+                      :class="getFloorPlanAreaErvMode(idx) === 'heat' ? 'heat-mode' : 'normal-mode'"
+                    >
+                      <VIcon
+                        v-if="getFloorPlanAreaErvMode(idx) === 'heat'"
+                        icon="tabler-arrows-left-right"
+                        size="16"
+                        title="โหมด Heat"
+                      />
+                      <VIcon
+                        v-else
+                        icon="tabler-arrow-big-up-lines"
+                        size="16"
+                        title="โหมด Normal"
+                      />
                     </div>
                   </div>
                 </div>
@@ -3568,18 +4274,23 @@ onBeforeUnmount(() => {
                   md="4"
                 >
                   <VSelect
-                    v-model="selectedFloor"
-                    :items="availableFloors"
+                    v-model="selectedAreaId"
+                    :items="availableAreas"
                     item-title="title"
                     item-value="value"
-                    label="เลือกชั้น"
+                    label="เลือกโซน (Area)"
                     density="compact"
                     variant="outlined"
                     :disabled="!selectedBuilding"
-                    @update:model-value="handleFloorChange"
-                  />
+                    @update:model-value="handleAreaChange"
+                  >
+                    <template #selection>
+                      {{ selectedAreaDisplayName || selectedAreaId }}
+                    </template>
+                  </VSelect>
                 </VCol>
                 <VCol
+                  v-if="selectedAreaId"
                   cols="12"
                   md="4"
                 >
@@ -3591,7 +4302,7 @@ onBeforeUnmount(() => {
                     label="เลือกห้อง"
                     density="compact"
                     variant="outlined"
-                    :disabled="!selectedBuilding || !selectedFloor"
+                    :disabled="!selectedBuilding || !selectedAreaId"
                     clearable
                     @update:model-value="handleRoomChange"
                   >
@@ -3618,10 +4329,10 @@ onBeforeUnmount(() => {
                   />
                   <div>
                     <h4 class="text-h4 mb-0">
-                      {{ (selectedRoom?.name || selectedRoomTitle) || (selectedArea + ' Control') }}
+                      {{ (selectedRoom?.name || selectedRoomTitle) || (selectedAreaDisplayName + ' Control') }}
                     </h4>
                     <div class="text-caption text-disabled">
-                      Floor {{ selectedFloor }}
+                      {{ selectedAreaDisplayName }}
                     </div>
                   </div>
                 </div>
@@ -3847,6 +4558,31 @@ onBeforeUnmount(() => {
                 
                 <!-- Light Icons -->
                 <div
+                  v-for="(fan, idx) in devicePositions.vent_fan"
+                  :key="'vent-fan-' + idx"
+                  class="device-icon erv-icon"
+                  :style="{ left: fan.x + '%', top: fan.y + '%' }"
+                  :class="{
+                    'active': getDeviceState('vent_fan', idx),
+                    'rotating': getDeviceState('vent_fan', idx),
+                    'draggable': editMode && isSuperAdmin,
+                    'dragging': dragging && draggedDevice.type === 'vent_fan' && draggedDevice.index === idx,
+                  }"
+                  @click="!editMode && openDeviceModal('vent_fan', idx)"
+                  @mousedown="editMode && isSuperAdmin && startDrag($event, 'vent_fan', idx)"
+                  :title="editMode && isSuperAdmin ? 'ลากเพื่อย้ายตำแหน่ง' : (getDeviceState('vent_fan', idx) ? 'พัดลมระบายอากาศ: เปิด' : 'พัดลมระบายอากาศ: ปิด')"
+                >
+                  <div class="icon-circle">
+                    <img
+                      :src="fanImage"
+                      alt="Ventilation Fan"
+                      class="erv-fan-icon"
+                    />
+                  </div>
+                </div>
+
+                <!-- Light Icons -->
+                <div
                   v-for="(light, idx) in devicePositions.light"
                   :key="'light-' + idx"
                   class="device-icon light-icon"
@@ -3862,6 +4598,43 @@ onBeforeUnmount(() => {
                 >
                   <div class="icon-circle">
                     <VIcon icon="tabler-bulb" />
+                  </div>
+                </div>
+
+                <!-- AM319: แถว 9 sensor (device_type am319 ใน devices + ค่าจาก environmental_data ตาม room_id) -->
+                <div
+                  v-if="devicePositions.am319 && devicePositions.am319.length > 0"
+                  class="am319-sensor-row"
+                  :style="{
+                    left: devicePositions.am319[0].x + '%',
+                    top: devicePositions.am319[0].y + '%',
+                  }"
+                  :class="{
+                    'draggable': editMode && isSuperAdmin,
+                    'dragging': dragging && draggedDevice.type === 'am319' && draggedDevice.index === 0,
+                  }"
+                  @mousedown="editMode && isSuperAdmin && startDrag($event, 'am319', 0)"
+                >
+                  <div
+                    v-for="stype in am319SensorOrder"
+                    :key="'am319-tile-' + stype"
+                    class="sensor-overlay sensor-overlay--inline"
+                    :style="{ '--sensor-color': sensorTypeDefinitions[stype]?.color || '#666' }"
+                  >
+                    <div class="sensor-overlay-card">
+                      <VIcon
+                        :icon="sensorTypeDefinitions[stype]?.icon || 'tabler-device-analytics'"
+                        size="18"
+                        :color="sensorTypeDefinitions[stype]?.color"
+                      />
+                      <div class="sensor-overlay-label">
+                        {{ sensorTypeDefinitions[stype]?.label }}
+                      </div>
+                      <div class="sensor-overlay-value">
+                        {{ getSensorValue(stype) }}
+                        <span class="sensor-overlay-unit">{{ getSensorUnit(stype) }}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -3981,9 +4754,9 @@ onBeforeUnmount(() => {
       </VCol>
     </VRow>
 
-    <!-- Environmental Monitoring -->
+    <!-- Environmental Monitoring (ปิดการแสดงผล) -->
     <VRow
-      v-if="selectedRoomId"
+      v-if="false"
       class="mb-4"
     >
       <VCol cols="12">
@@ -4264,7 +5037,248 @@ onBeforeUnmount(() => {
       </VCol>
     </VRow>
 
-    <!-- Device Control Dialog -->
+    <!-- Energy Usage -->
+    <VRow
+      v-if="selectedRoomId"
+      class="mb-4"
+    >
+      <VCol cols="12">
+        <VCard>
+          <VCardTitle>
+            <VIcon
+              icon="tabler-bolt"
+              class="me-2"
+            />
+            การใช้พลังงาน • {{ selectedRoomTitle }}
+          </VCardTitle>
+          <VCardText>
+            <div class="d-flex flex-wrap align-center gap-2 mb-4">
+              <VBtnToggle
+                v-model="energyPeriod"
+                mandatory
+                density="compact"
+                color="primary"
+              >
+                <VBtn value="1d">
+                  1 วัน
+                </VBtn>
+                <VBtn value="7d">
+                  7 วัน
+                </VBtn>
+                <VBtn value="1m">
+                  1 เดือน
+                </VBtn>
+                <VBtn value="custom">
+                  เลือกเอง
+                </VBtn>
+              </VBtnToggle>
+
+              <template v-if="energyPeriod === 'custom'">
+                <VTextField
+                  v-model="energyCustomStart"
+                  type="date"
+                  label="เริ่ม"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  style="max-width: 170px"
+                />
+                <VTextField
+                  v-model="energyCustomEnd"
+                  type="date"
+                  label="ถึง"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  style="max-width: 170px"
+                />
+                <VBtn
+                  color="primary"
+                  density="compact"
+                  @click="loadEnergyData"
+                >
+                  ค้นหา
+                </VBtn>
+              </template>
+            </div>
+
+            <VRow class="mb-4">
+              <VCol
+                cols="6"
+                md="3"
+              >
+                <VCard
+                  variant="flat"
+                  class="sensor-card"
+                >
+                  <VCardText class="text-center pa-4">
+                    <div class="sensor-icon-wrapper sensor-icon-info mb-2">
+                      <VIcon
+                        icon="tabler-bolt"
+                        size="32"
+                        color="info"
+                      />
+                    </div>
+                    <div class="text-caption text-disabled mb-1">
+                      พลังงานรวม
+                    </div>
+                    <div class="text-h5 font-weight-bold">
+                      {{ energyData.summary.totalEnergy }}
+                    </div>
+                    <div class="text-caption text-disabled">
+                      kWh
+                    </div>
+                  </VCardText>
+                </VCard>
+              </VCol>
+              <VCol
+                cols="6"
+                md="3"
+              >
+                <VCard
+                  variant="flat"
+                  class="sensor-card"
+                >
+                  <VCardText class="text-center pa-4">
+                    <div class="sensor-icon-wrapper sensor-icon-success mb-2">
+                      <VIcon
+                        icon="tabler-chart-bar"
+                        size="32"
+                        color="success"
+                      />
+                    </div>
+                    <div class="text-caption text-disabled mb-1">
+                      กำลังเฉลี่ย
+                    </div>
+                    <div class="text-h5 font-weight-bold">
+                      {{ energyData.summary.avgPower }}
+                    </div>
+                    <div class="text-caption text-disabled">
+                      W
+                    </div>
+                  </VCardText>
+                </VCard>
+              </VCol>
+              <VCol
+                cols="6"
+                md="3"
+              >
+                <VCard
+                  variant="flat"
+                  class="sensor-card"
+                >
+                  <VCardText class="text-center pa-4">
+                    <div class="sensor-icon-wrapper sensor-icon-warning mb-2">
+                      <VIcon
+                        icon="tabler-arrow-up"
+                        size="32"
+                        color="warning"
+                      />
+                    </div>
+                    <div class="text-caption text-disabled mb-1">
+                      กำลังสูงสุด
+                    </div>
+                    <div class="text-h5 font-weight-bold">
+                      {{ energyData.summary.maxPower }}
+                    </div>
+                    <div class="text-caption text-disabled">
+                      W
+                    </div>
+                  </VCardText>
+                </VCard>
+              </VCol>
+              <VCol
+                cols="6"
+                md="3"
+              >
+                <VCard
+                  variant="flat"
+                  class="sensor-card"
+                >
+                  <VCardText class="text-center pa-4">
+                    <div class="sensor-icon-wrapper sensor-icon-error mb-2">
+                      <VIcon
+                        icon="tabler-database"
+                        size="32"
+                        color="error"
+                      />
+                    </div>
+                    <div class="text-caption text-disabled mb-1">
+                      จำนวนข้อมูล
+                    </div>
+                    <div class="text-h5 font-weight-bold">
+                      {{ energyData.summary.recordCount }}
+                    </div>
+                    <div class="text-caption text-disabled">
+                      records
+                    </div>
+                  </VCardText>
+                </VCard>
+              </VCol>
+            </VRow>
+
+            <VCard
+              variant="outlined"
+            >
+              <VCardText>
+                <div v-if="energyLoading" class="text-center py-8">
+                  <VProgressCircular
+                    indeterminate
+                    color="primary"
+                  />
+                  <div class="text-caption text-disabled mt-2">
+                    กำลังโหลดข้อมูลพลังงาน...
+                  </div>
+                </div>
+                <div v-else-if="energyData.records.length === 0" class="text-center py-8">
+                  <VIcon
+                    icon="tabler-chart-line"
+                    size="60"
+                    color="disabled"
+                    class="mb-2"
+                  />
+                  <div class="text-body-2 text-disabled mb-2">
+                    ไม่มีข้อมูลพลังงานในช่วงเวลาที่เลือก
+                  </div>
+                  <div class="text-caption text-disabled">
+                    ลองเลือก «เลือกเอง» แล้วกำหนดช่วงวันที่กว้างขึ้น
+                  </div>
+                </div>
+                <template v-else>
+                  <VAlert
+                    v-if="energyIsMock"
+                    type="warning"
+                    variant="tonal"
+                    density="compact"
+                    class="mb-3"
+                  >
+                    ข้อมูลตัวอย่าง — ยังไม่มีข้อมูลพลังงานใน DB สำหรับห้องนี้
+                  </VAlert>
+                  <VAlert
+                    v-else-if="energyUsedFallback"
+                    type="info"
+                    variant="tonal"
+                    density="compact"
+                    class="mb-3"
+                  >
+                    แสดงข้อมูลล่าสุดที่มีในระบบ (ไม่ตรงกับช่วงที่เลือก)
+                  </VAlert>
+                  <VueApexCharts
+                    type="area"
+                    :height="300"
+                    :options="energyChartOptions"
+                    :series="energyChartSeries"
+                  />
+                </template>
+              </VCardText>
+            </VCard>
+          </VCardText>
+        </VCard>
+      </VCol>
+    </VRow>
+    </div>
+
+    <!-- Device Control Dialog — ใช้ร่วมกันทั้ง floor plan และ room control -->
     <VDialog
       v-model="showDeviceModal"
       max-width="600"
@@ -4410,6 +5424,61 @@ onBeforeUnmount(() => {
               <div class="text-caption text-disabled mt-2">
                 คลิกที่ icon เพื่อเปิด/ปิด
             </div>
+          </div>
+
+          <!-- Light Brightness Control -->
+          <div v-if="selectedDevice.type === 'light'">
+            <VCard
+              variant="outlined"
+              class="mb-4 light-control-card"
+            >
+              <VCardText>
+                <div class="d-flex align-center mb-3">
+                  <VAvatar
+                    size="40"
+                    color="warning"
+                    variant="tonal"
+                    class="me-3"
+                  >
+                    <VIcon
+                      icon="tabler-sliders"
+                      size="20"
+                    />
+                  </VAvatar>
+                  <div>
+                    <div class="text-h6 mb-0">
+                      ความสว่าง
+                    </div>
+                    <div class="text-caption text-disabled">
+                      ปรับความสว่างของไฟ (Home Assistant)
+                    </div>
+                  </div>
+                </div>
+
+                <div class="text-center mb-2">
+                  <span class="text-h5 font-weight-bold">
+                    {{ getLightBrightness(selectedDevice.index) }}
+                  </span>
+                  <span class="text-caption text-disabled">
+                    / 255
+                  </span>
+                </div>
+
+                <VSlider
+                  :model-value="getLightBrightness(selectedDevice.index)"
+                  min="1"
+                  max="255"
+                  step="1"
+                  color="warning"
+                  @update:model-value="updateLightBrightness(selectedDevice.index, $event)"
+                />
+
+                <div class="d-flex justify-space-between text-caption text-disabled mt-2">
+                  <span>1</span>
+                  <span>255</span>
+                </div>
+              </VCardText>
+            </VCard>
           </div>
 
           <!-- AC Control -->
@@ -4735,7 +5804,6 @@ onBeforeUnmount(() => {
         </VCardActions>
       </VCard>
     </VDialog>
-    </div>
 
     <!-- System Control Confirmation Dialog -->
     <VDialog
@@ -4765,7 +5833,7 @@ onBeforeUnmount(() => {
             </template>
             <template v-else>
               เลือกการควบคุมระบบใน
-              <strong>Building {{ selectedBuilding }}, Floor {{ selectedFloor }}</strong>
+              <strong>Building {{ selectedBuilding }}, {{ selectedAreaDisplayName }}</strong>
             </template>
           </div>
           <VAlert
@@ -5691,6 +6759,41 @@ onBeforeUnmount(() => {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
+/* แถว AM319: 9 การ์ดเรียงแนวนอน — จุด x,y จาก devices.device_type = am319 */
+.am319-sensor-row {
+  position: absolute;
+  z-index: 14;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 96%;
+  overflow: visible;
+  pointer-events: auto;
+}
+
+.am319-sensor-row.draggable {
+  cursor: grab;
+  user-select: none;
+}
+
+.am319-sensor-row.draggable:active,
+.am319-sensor-row.dragging {
+  cursor: grabbing;
+}
+
+.sensor-overlay--inline {
+  position: relative;
+  transform: none;
+  flex: 0 0 auto;
+}
+
+.am319-sensor-row .sensor-overlay-card {
+  min-width: 62px;
+  padding: 5px 6px 4px;
+}
+
 .sensor-overlay-card {
   position: relative;
   display: flex;
@@ -5797,6 +6900,29 @@ onBeforeUnmount(() => {
   object-fit: contain;
 }
 
+.floor-plan-devices-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.floor-plan-devices-overlay .floor-plan-device-icon {
+  pointer-events: auto;
+  position: absolute;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  z-index: 25;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .areas-overlay {
   position: absolute;
   top: 0;
@@ -5804,6 +6930,7 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   pointer-events: none;
+  z-index: 10;
 }
 
 .area-box {

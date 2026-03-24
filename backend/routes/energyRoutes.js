@@ -12,6 +12,9 @@ router.post('/notification/list', energyController.getNotificationList);
 // Update notification setting
 router.post('/notification/update', energyController.notificationUpdate);
 
+// Get energy data for a room
+router.get('/room/:roomId', energyController.getRoomEnergy);
+
 module.exports = router;
 
 

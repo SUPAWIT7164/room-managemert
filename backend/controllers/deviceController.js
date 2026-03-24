@@ -5,7 +5,7 @@ const homeAssistantSyncService = require('../services/homeAssistantSyncService')
 const { getControllableDeviceTypes } = require('../config/deviceTypes');
 
 /** ประเภทที่ sync จาก Home Assistant ลง device_states */
-const HA_DEVICE_TYPES = ['light', 'ac', 'erv'];
+const HA_DEVICE_TYPES = ['light', 'ac', 'erv', 'vent_fan'];
 
 /**
  * เติมสถานะจาก device_states (ที่ sync จาก HA) ให้อุปกรณ์ทุกตัว — ใช้ HA เป็นหลัก
@@ -28,32 +28,16 @@ async function enrichDevicesWithHAStatus(devices) {
         }
     }
 
-    const byRoomAndType = {};
-    for (const d of devices) {
-        const r = d.room_id;
-        const t = deviceTypeKey(d);
-        if (!byRoomAndType[r]) byRoomAndType[r] = {};
-        if (!byRoomAndType[r][t]) byRoomAndType[r][t] = [];
-        byRoomAndType[r][t].push(d);
-    }
-    for (const r of Object.keys(byRoomAndType)) {
-        for (const t of Object.keys(byRoomAndType[r])) {
-            byRoomAndType[r][t].sort((a, b) => (a.id || 0) - (b.id || 0));
-        }
-    }
-
     for (const d of devices) {
         const r = d.room_id;
         const t = deviceTypeKey(d);
         if (!HA_DEVICE_TYPES.includes(t)) continue;
 
-        const list = byRoomAndType[r]?.[t] || [];
-        const idx = list.findIndex((x) => x.id === d.id);
-        const deviceIndex = idx >= 0 ? idx : 0;
-
         const roomStates = statesByRoom[r];
         const typeStates = roomStates?.[t];
-        const stateAt = typeStates && deviceIndex < typeStates.length ? typeStates[deviceIndex] : null;
+        const stateAt = typeStates?.find(
+            (s) => s && Number(s.device_id) === Number(d.id)
+        ) ?? null;
 
         if (stateAt != null && typeof stateAt === 'object' && 'status' in stateAt) {
             const on = Boolean(stateAt.status);
@@ -1009,12 +993,12 @@ class DeviceController {
     /**
      * ควบคุมไฟ (เปิด/ปิด)
      * POST /api/devices/light/:entityId/control
-     * Body: { action: "on" | "off" }
+     * Body: { action: "on" | "off", brightness?: number } (brightness for dimmable lights)
      */
     async controlLight(req, res) {
         try {
             const { entityId } = req.params;
-            const { action } = req.body;
+            const { action, brightness } = req.body;
 
             console.log('[Device] controlLight called:', { entityId, action });
 
@@ -1033,8 +1017,10 @@ class DeviceController {
                 });
             }
 
+            const actionLower = action.toLowerCase();
             // ใช้ controlSwitch สำหรับ light entity (light domain ใช้ turn_on/turn_off เหมือน switch)
-            const result = await homeAssistantService.controlSwitch(entityId, action.toLowerCase());
+            const opts = actionLower === 'on' && brightness != null ? { brightness } : undefined;
+            const result = await homeAssistantService.controlSwitch(entityId, actionLower, opts);
 
             // Sync สถานะไปยัง DB (async, ไม่ต้องรอ)
             // ใช้ deviceId จาก entityId (เช่น "light.lights_17" -> "LIGHTS_17")

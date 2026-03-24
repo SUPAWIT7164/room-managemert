@@ -30,6 +30,9 @@ const controls = reactive({
   erv: false,
 })
 
+const acDeviceIds = ref({})
+const ervDeviceIds = ref({})
+
 const fetchRooms = async () => {
   loading.value = true
   try {
@@ -73,6 +76,16 @@ const loadRoomDevices = async () => {
     const response = await api.get(`/rooms/${selectedRoomId.value}/devices`)
     if (response.data && response.data.data) {
       const devices = response.data.data
+      if (devices.deviceIdsByType) {
+        if (Array.isArray(devices.deviceIdsByType.ac)) {
+          acDeviceIds.value = {}
+          devices.deviceIdsByType.ac.forEach((id, i) => { acDeviceIds.value[i] = id })
+        }
+        if (Array.isArray(devices.deviceIdsByType.erv)) {
+          ervDeviceIds.value = {}
+          devices.deviceIdsByType.erv.forEach((id, i) => { ervDeviceIds.value[i] = id })
+        }
+      }
       if (devices.deviceStates) {
         // Load AC states
         if (devices.deviceStates.ac) {
@@ -148,7 +161,9 @@ const toggleDevice = async (index) => {
       temperature: acTemperatures[index] || 25,
     }
 
-    await api.post(`/rooms/${selectedRoomId.value}/devices/ac/${index}`, payload)
+    const deviceId = acDeviceIds.value[index]
+    if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ ac[${index}]`)
+    await api.post(`/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`, payload)
     
     // Update control switch
     controls.ac = deviceStates.ac.some(state => state)
@@ -170,7 +185,9 @@ const updateACMode = async (index, mode) => {
       temperature: acTemperatures[index] || 25,
     }
 
-    await api.post(`/rooms/${selectedRoomId.value}/devices/ac/${index}`, payload)
+    const deviceId = acDeviceIds.value[index]
+    if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ ac[${index}]`)
+    await api.post(`/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`, payload)
   } catch (error) {
     console.error('Error updating AC mode:', error)
   }
@@ -188,7 +205,9 @@ const updateACTemperature = async (index, temperature) => {
       temperature: temperature,
     }
 
-    await api.post(`/rooms/${selectedRoomId.value}/devices/ac/${index}`, payload)
+    const deviceId = acDeviceIds.value[index]
+    if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ ac[${index}]`)
+    await api.post(`/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`, payload)
   } catch (error) {
     console.error('Error updating AC temperature:', error)
   }
@@ -265,7 +284,9 @@ const toggleERVDevice = async (index) => {
       mode: ervSettings.mode[index] || 'normal',
     }
 
-    await api.post(`/rooms/${selectedRoomId.value}/devices/erv/${index}`, payload)
+    const deviceId = ervDeviceIds.value[index]
+    if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ erv[${index}]`)
+    await api.post(`/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`, payload)
     
     // Update control switch
     controls.erv = deviceStates.erv.some(state => state)
@@ -287,7 +308,9 @@ const updateERVSpeed = async (index, speed) => {
       mode: ervSettings.mode[index] || 'normal',
     }
 
-    await api.post(`/rooms/${selectedRoomId.value}/devices/erv/${index}`, payload)
+    const deviceId = ervDeviceIds.value[index]
+    if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ erv[${index}]`)
+    await api.post(`/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`, payload)
   } catch (error) {
     console.error('Error updating ERV speed:', error)
   }
@@ -305,7 +328,9 @@ const updateERVMode = async (index, mode) => {
       mode: mode,
     }
 
-    await api.post(`/rooms/${selectedRoomId.value}/devices/erv/${index}`, payload)
+    const deviceId = ervDeviceIds.value[index]
+    if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ erv[${index}]`)
+    await api.post(`/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`, payload)
   } catch (error) {
     console.error('Error updating ERV mode:', error)
   }

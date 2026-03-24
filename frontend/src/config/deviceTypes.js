@@ -33,6 +33,15 @@ export const DEFAULT_DEVICE_TYPES = [
     description: 'ควบคุมระบบระบายอากาศ',
     order: 3,
   },
+  {
+    key: 'vent_fan',
+    apiPath: 'vent-fan',
+    label: 'พัดลมระบายอากาศ',
+    labelEn: 'Ventilation Fan',
+    icon: 'tabler-fan',
+    description: 'ควบคุมพัดลมระบายอากาศ',
+    order: 4,
+  },
 ]
 
 /**

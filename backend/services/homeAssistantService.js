@@ -208,7 +208,7 @@ class HomeAssistantService {
      * @param {string} action - "on" หรือ "off"
      * @returns {Promise<object>}
      */
-    async controlSwitch(entityId, action) {
+    async controlSwitch(entityId, action, options = {}) {
         if (!this.isEnabled()) {
             throw new Error('Home Assistant ไม่ได้ตั้งค่า');
         }
@@ -220,6 +220,14 @@ class HomeAssistantService {
             const payload = {
                 entity_id: entityId
             };
+
+            // If it's a dimmable light, pass brightness to light.turn_on
+            if (domain === 'light' && action === 'on' && options && options.brightness != null) {
+                const b = Number(options.brightness)
+                if (!Number.isNaN(b)) {
+                    payload.brightness = b
+                }
+            }
 
             console.log(`[HomeAssistant] เรียก API: POST /api/services/${domain}/${service}`, payload);
 
@@ -244,7 +252,7 @@ class HomeAssistantService {
                 status: error.response?.status,
                 data: errorDetails
             });
-            throw new Error(`ไม่สามารถ${action === 'on' ? 'เปิด' : 'ปิด'}ได้: ${errorMsg}`);
+                throw new Error(`ไม่สามารถ${action === 'on' ? 'เปิด' : 'ปิด'}ได้: ${errorMsg}`);
         }
     }
 

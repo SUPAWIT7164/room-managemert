@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const roomController = require('../controllers/roomController');
+const controllableDeviceController = require('../controllers/controllableDeviceController');
 const { authenticate, isAdmin, isSuperAdmin } = require('../middleware/auth');
 const multer = require('multer');
 const path = require('path');
@@ -69,7 +70,9 @@ router.put('/:id/auto-approve', isAdmin, roomController.updateAutoApprove);
 
 // Room devices
 router.get('/:id/devices', roomController.getDevices);
-router.post('/:id/devices/:type/:index?', roomController.controlDevice);
+// New (device_id-based) control route
+router.post('/:id/devices/by-id/:deviceId', roomController.controlDeviceById);
+router.post('/:id/devices/:type', roomController.controlDevice);
 
 // Device positions
 router.get('/:id/device-positions', roomController.getDevicePositions);
@@ -97,5 +100,11 @@ router.put('/:id/automation', isAdmin, roomController.updateAutomationStatus);
 
 // Room Image Upload (super-admin only)
 router.post('/:id/upload-image', isSuperAdmin, upload.single('image'), roomController.uploadImage);
+
+// Controllable devices management (light, ac, erv)
+router.get('/:roomId/controllable-devices', controllableDeviceController.getByRoom);
+router.post('/:roomId/controllable-devices', isAdmin, controllableDeviceController.addDevice);
+router.put('/:roomId/controllable-devices/:deviceId', isAdmin, controllableDeviceController.updateDevice);
+router.delete('/:roomId/controllable-devices/:deviceId', isAdmin, controllableDeviceController.removeDevice);
 
 module.exports = router;

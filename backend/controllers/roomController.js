@@ -5,6 +5,146 @@ const DeviceState = require('../models/DeviceState');
 const DevicePosition = require('../models/DevicePosition');
 const { pool } = require('../config/database');
 const roomControlProxyService = require('../services/roomControlProxyService');
+const homeAssistantService = require('../services/homeAssistantService');
+
+/**
+ * ดึงสถานะอุปกรณ์จาก Home Assistant โดยใช้ entity_id จากตาราง devices
+ * @param {number} roomId - Room ID
+ * @returns {Promise<object>} - { light: [{status, ...}], ac: [{status, mode, temperature, ...}], erv: [{status, settings, ...}] }
+ */
+async function fetchDeviceStatesFromHomeAssistant(roomId) {
+    if (!homeAssistantService.isEnabled()) {
+        return null;
+    }
+
+    try {
+        // ดึงอุปกรณ์ทั้งหมดของห้องที่มี entity_id
+        const [devices] = await pool.query(
+            `SELECT id, device_type, code, entity_id FROM devices 
+             WHERE room_id = ? 
+             AND entity_id IS NOT NULL AND LTRIM(RTRIM(ISNULL(entity_id, ''))) != ''
+             AND (disable = 0 OR disable IS NULL)
+             ORDER BY device_type, id`,
+            [roomId]
+        );
+
+        if (!devices || devices.length === 0) {
+            console.log(`[RoomController] No devices with entity_id found for room ${roomId}`);
+            return null;
+        }
+
+        const result = {
+            light: [],
+            ac: [],
+            erv: []
+        };
+
+        for (const device of devices) {
+            const entityId = device.entity_id;
+            let deviceType = device.device_type || device.code;
+            if (deviceType) deviceType = deviceType.toLowerCase();
+            if (deviceType === 'air') deviceType = 'ac';
+
+            try {
+                const stateResult = await homeAssistantService.getState(entityId);
+                const haState = stateResult.state;
+                const stateStr = (haState.state || '').toString().toLowerCase();
+
+                // Light devices
+                if (deviceType === 'light' || entityId.startsWith('light.') || entityId.startsWith('switch.')) {
+                    if (deviceType !== 'erv' && !entityId.includes('erv')) {
+                        const isOn = stateStr === 'on';
+                        result.light.push({
+                            status: isOn,
+                            brightness: haState.attributes?.brightness || null
+                        });
+                        console.log(`[RoomController] HA Light ${entityId}: ${isOn ? 'ON' : 'OFF'}`);
+                    }
+                }
+
+                // AC / Climate devices
+                if (deviceType === 'ac' || entityId.startsWith('climate.')) {
+                    const isOn = stateStr !== 'off' && stateStr !== 'unavailable';
+                    const mode = isOn ? (haState.state || 'cool') : 'off';
+                    const temperature = haState.attributes?.temperature || 25;
+                    const fanMode = haState.attributes?.fan_mode || 'auto';
+                    
+                    result.ac.push({
+                        status: isOn,
+                        mode: mode,
+                        temperature: temperature,
+                        settings: {
+                            mode: mode,
+                            fan_mode: fanMode,
+                            temperature: temperature
+                        }
+                    });
+                    console.log(`[RoomController] HA AC ${entityId}: ${isOn ? 'ON' : 'OFF'}, mode=${mode}, temp=${temperature}`);
+                }
+
+                // ERV devices
+                if (deviceType === 'erv' || entityId.includes('erv')) {
+                    const isOn = stateStr === 'on';
+                    result.erv.push({
+                        status: isOn,
+                        settings: {
+                            mode: 'normal',
+                            speed: 'medium'
+                        }
+                    });
+                    console.log(`[RoomController] HA ERV ${entityId}: ${isOn ? 'ON' : 'OFF'}`);
+                }
+            } catch (err) {
+                console.warn(`[RoomController] Failed to get HA state for ${entityId}:`, err.message);
+            }
+        }
+
+        console.log(`[RoomController] HA device states for room ${roomId}:`, JSON.stringify(result));
+        return result;
+    } catch (err) {
+        console.error('[RoomController] fetchDeviceStatesFromHomeAssistant error:', err.message);
+        return null;
+    }
+}
+
+/** ดึง entity_id จากตาราง devices ตาม devices.id */
+async function getEntityIdByDeviceId(deviceId) {
+    const [rows] = await pool.query(
+        `SELECT entity_id FROM devices WHERE id = ? AND (disable = 0 OR disable IS NULL)`,
+        [deviceId]
+    );
+    return rows && rows[0] && rows[0].entity_id ? String(rows[0].entity_id).trim() : null;
+}
+
+/**
+ * ส่งคำสั่งไป Home Assistant สำหรับ entity_id ที่รู้แล้ว
+ */
+async function sendHomeAssistantEntityControl(entityId, deviceType, status, settings) {
+    const action = status === true || status === 1 || status === 'on' || status === 'true' ? 'on' : 'off';
+    const domain = entityId.split('.')[0];
+    if (deviceType === 'light' || domain === 'light') {
+        const opts = settings && settings.brightness != null ? { brightness: settings.brightness } : undefined;
+        await homeAssistantService.controlSwitch(entityId, action, opts);
+        return { success: true, entityId, action };
+    }
+    if (domain === 'switch' || deviceType === 'erv') {
+        await homeAssistantService.controlSwitch(entityId, action);
+        return { success: true, entityId, action };
+    }
+    if (deviceType === 'ac' || domain === 'climate') {
+        const opts = settings && settings.temperature != null ? { temperature: settings.temperature, hvac_mode: settings.mode || 'cool' } : {};
+        await homeAssistantService.controlClimate(entityId, action, opts);
+        return { success: true, entityId, action };
+    }
+    await homeAssistantService.controlSwitch(entityId, action);
+    return { success: true, entityId, action };
+}
+
+async function controlDeviceViaHomeAssistantByDeviceId(deviceId, deviceType, status, settings) {
+    const entityId = await getEntityIdByDeviceId(deviceId);
+    if (!entityId) return { skipped: true, reason: 'no_entity_id' };
+    return sendHomeAssistantEntityControl(entityId, deviceType, status, settings);
+}
 
 class RoomController {
     // Get all rooms
@@ -470,7 +610,9 @@ class RoomController {
     async getDevices(req, res) {
         try {
             const roomId = parseInt(req.params.id);
-            
+            const room = await Room.findById(roomId);
+            const areaId = room && room.area_id != null ? Number(room.area_id) : null;
+
             // Get device positions (จาก rooms.x1,y1,x2,y2 / device_positions; fallback ไป devices หรือ device_positions)
             let positions;
             try {
@@ -484,10 +626,26 @@ class RoomController {
                 }
             }
 
-            // Get device states (prefer real control API if configured; fallback to DB)
+            // Get device states (prefer Home Assistant > Control API > DB)
             let deviceStates = null;
             let source = 'db';
-            if (roomControlProxyService.isStatusEnabled()) {
+
+            // ลอง Home Assistant ก่อน (ถ้าเปิดใช้งาน)
+            if (homeAssistantService.isEnabled()) {
+                try {
+                    const haStates = await fetchDeviceStatesFromHomeAssistant(roomId);
+                    if (haStates && (haStates.light.length > 0 || haStates.ac.length > 0 || haStates.erv.length > 0)) {
+                        deviceStates = haStates;
+                        source = 'home-assistant';
+                        console.log(`[RoomController] Using Home Assistant states for room ${roomId}`);
+                    }
+                } catch (err) {
+                    console.warn('[RoomController] Home Assistant fetch failed:', err.message);
+                }
+            }
+
+            // ลอง Control API (ถ้า HA ไม่มีหรือล้มเหลว)
+            if (!deviceStates && roomControlProxyService.isStatusEnabled()) {
                 try {
                     const remote = await roomControlProxyService.fetchDeviceStatesByRoomId({ roomId });
                     if (remote && remote.deviceStates) {
@@ -495,18 +653,45 @@ class RoomController {
                         source = 'control-api';
                     }
                 } catch (err) {
-                    console.warn('[RoomController] Control API status fetch failed, fallback to DB:', err.message);
+                    console.warn('[RoomController] Control API status fetch failed:', err.message);
                 }
             }
+
+            // Fallback to DB
             if (!deviceStates) {
                 deviceStates = await DeviceState.getByRoom(roomId);
+                source = 'db';
             }
-            
+
+            // deviceIdsByType: ใช้ map icon index -> device_id (ORDER BY devices.id)
+            const [devRows] = await pool.query(
+                `SELECT id,
+                        LOWER(COALESCE(NULLIF(LTRIM(RTRIM(device_type)), ''), NULLIF(LTRIM(RTRIM(code)), ''))) AS t
+                 FROM devices
+                 WHERE room_id = ? AND (disable = 0 OR disable IS NULL)
+                   AND (
+                        LOWER(COALESCE(NULLIF(LTRIM(RTRIM(device_type)), ''), NULLIF(LTRIM(RTRIM(code)), ''))) IN ('light','ac','erv','air','vent_fan','fan','exhaust_fan','ventilation_fan')
+                   )
+                 ORDER BY id`,
+                [roomId]
+            );
+            const deviceIdsByType = { light: [], ac: [], erv: [], vent_fan: [] };
+            (devRows || []).forEach((r) => {
+                let t = r.t;
+                if (t === 'air') t = 'ac';
+                if (t === 'fan' || t === 'exhaust_fan' || t === 'ventilation_fan') t = 'vent_fan';
+                if (deviceIdsByType[t]) deviceIdsByType[t].push(r.id);
+            });
+
+            // หมายเหตุ: อุปกรณ์ area_id (room_id IS NULL) แสดงเฉพาะบน floor plan หน้า area เท่านั้น
+            // ไม่รวมใน room getDevices — ห้องแสดงเฉพาะอุปกรณ์ที่ตั้ง room_id ตรงกับห้องนี้
+
             res.json({
                 success: true,
                 data: {
                     positions,
                     deviceStates,
+                    deviceIdsByType,
                     source
                 }
             });
@@ -519,33 +704,27 @@ class RoomController {
         }
     }
 
-    // Control individual device
+    /** ควบคุมอุปกรณ์ทุกตัวของประเภทนั้นในห้อง — POST /rooms/:id/devices/:type (ไม่มี device_index) */
     async controlDevice(req, res) {
-        console.log(`[BACKEND DEBUG] ========== controlDevice called ==========`);
-        console.log(`[BACKEND DEBUG] Request method: ${req.method}`);
-        console.log(`[BACKEND DEBUG] Request URL: ${req.originalUrl}`);
-        console.log(`[BACKEND DEBUG] Request params:`, req.params);
-        console.log(`[BACKEND DEBUG] Request body:`, req.body);
-        console.log(`[BACKEND DEBUG] Request user:`, req.user?.id, req.user?.role);
+        console.log(`[BACKEND DEBUG] ========== controlDevice (bulk by type) ==========`);
         try {
-            const roomId = parseInt(req.params.id);
-            const deviceType = req.params.type; // light, ac, erv
-            const deviceIndex = req.params.index ? parseInt(req.params.index) : null;
+            const roomId = parseInt(req.params.id, 10);
+            const room = await Room.findById(roomId);
+            const areaId = room && room.area_id != null ? Number(room.area_id) : null;
+            const deviceType = req.params.type;
+
+            if (!['light', 'ac', 'erv', 'vent_fan'].includes(deviceType)) {
+                return res.status(400).json({ success: false, message: 'Invalid device type' });
+            }
+
             let { status, settings, temperature, mode, speed } = req.body;
-            
-            // Convert status to boolean if it's a string
-            console.log(`[BACKEND DEBUG] controlDevice: received status=${status} (${typeof status})`);
+
             if (typeof status === 'string') {
                 status = status === 'on' || status === 'true' || status === '1';
-                console.log(`[BACKEND DEBUG] controlDevice: converted string status to boolean: ${status}`);
             } else if (typeof status === 'number') {
                 status = status === 1;
-                console.log(`[BACKEND DEBUG] controlDevice: converted number status to boolean: ${status}`);
-            } else {
-                console.log(`[BACKEND DEBUG] controlDevice: status is already boolean: ${status}`);
             }
-            
-            // Build settings object if individual properties are provided
+
             if (!settings && (temperature !== undefined || mode !== undefined || speed !== undefined)) {
                 settings = {};
                 if (temperature !== undefined) settings.temperature = temperature;
@@ -553,161 +732,57 @@ class RoomController {
                 if (speed !== undefined) settings.speed = speed;
             }
 
-            // Forward command to real control API first (if configured).
-            // If that fails, DO NOT write DB state to avoid UI showing a false success.
+            const idsByType = await DeviceState.listRoomDeviceIdsByType(roomId);
+            const deviceIds = idsByType[deviceType] || [];
+
             const isUsingRealAPI = roomControlProxyService.isControlEnabled();
             if (isUsingRealAPI) {
                 try {
-                    console.log(`[RoomController] Sending control command to real API:`, {
-                        roomId,
-                        deviceType,
-                        deviceIndex,
-                        status,
-                        statusType: typeof status,
-                        settings,
-                    });
-                    
-                    // If deviceIndex is null (control all), send command for each device individually
-                    if (deviceIndex === null) {
-                        // Get existing device states to know which devices to control
-                        const [existingStates] = await pool.query(
-                            `SELECT device_index FROM device_states 
-                             WHERE room_id = ? AND device_type = ?
-                             ORDER BY device_index ASC`,
-                            [roomId, deviceType]
+                    console.log(`[RoomController] Control API bulk: room=${roomId} type=${deviceType} localDevices=${deviceIds.length}`);
+                    if (deviceIds.length > 0) {
+                        const controlPromises = deviceIds.map((_, idx) =>
+                            roomControlProxyService.controlDeviceByRoomId({
+                                roomId,
+                                deviceType,
+                                deviceIndex: idx,
+                                status,
+                                settings,
+                                requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
+                            }).catch(err => {
+                                console.error(`[RoomController] Failed to control device index ${idx}:`, err.message);
+                                return { error: err.message, deviceIndex: idx };
+                            })
                         );
-                        
-                        // Also check device positions (rooms first, then devices / device_positions)
-                        let positions;
+                        const results = await Promise.allSettled(controlPromises);
+                        const successful = results.filter(r => r.status === 'fulfilled' && !r.value?.error).length;
+                        const failed = results.filter(r => r.status === 'rejected' || r.value?.error).length;
+                        if (failed > 0 && successful === 0) {
+                            throw new Error(`ไม่สามารถควบคุมอุปกรณ์ได้ (ล้มเหลวทั้งหมด ${failed} อุปกรณ์)`);
+                        }
+                    } else if (roomControlProxyService.isStatusEnabled()) {
                         try {
-                            positions = await Room.getDevicePositions(roomId);
-                        } catch (e) {
-                            try {
-                                positions = await Device.getPositionsByRoom(roomId);
-                            } catch (e2) {
-                                positions = await DevicePosition.getByRoom(roomId);
-                            }
-                        }
-                        const devicePositions = positions[deviceType] || [];
-                        
-                        // Get unique device indices from both sources
-                        const deviceIndices = new Set();
-                        existingStates.forEach(state => deviceIndices.add(state.device_index));
-                        
-                        // Extract device indices from positions array
-                        if (Array.isArray(devicePositions)) {
-                            devicePositions.forEach((pos, index) => {
-                                if (pos && typeof pos === 'object') {
-                                    // Check if position object has device_index property
-                                    if (pos.device_index !== undefined && pos.device_index !== null) {
-                                        deviceIndices.add(pos.device_index);
-                                    } else {
-                                        // If no device_index, use array index as fallback
-                                        deviceIndices.add(index);
-                                    }
-                                } else {
-                                    // If position is not an object, use array index
-                                    deviceIndices.add(index);
-                                }
-                            });
-                        }
-                        
-                        const uniqueIndices = Array.from(deviceIndices).sort((a, b) => a - b);
-                        
-                        if (uniqueIndices.length > 0) {
-                            console.log(`[RoomController] Sending control commands for ${uniqueIndices.length} devices individually (indices: ${uniqueIndices.join(', ')})`);
-                            // Send command for each device
-                            const controlPromises = uniqueIndices.map(idx => 
-                                roomControlProxyService.controlDeviceByRoomId({
-                                    roomId,
-                                    deviceType,
-                                    deviceIndex: idx,
-                                    status,
-                                    settings,
-                                    requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
-                                }).catch(err => {
-                                    console.error(`[RoomController] Failed to control device ${idx}:`, err.message);
-                                    return { error: err.message, deviceIndex: idx };
-                                })
-                            );
-                            
-                            const results = await Promise.allSettled(controlPromises);
-                            const successful = results.filter(r => r.status === 'fulfilled' && !r.value?.error).length;
-                            const failed = results.filter(r => r.status === 'rejected' || r.value?.error).length;
-                            
-                            console.log(`[RoomController] Control results: ${successful} successful, ${failed} failed`);
-                            
-                            if (failed > 0 && successful === 0) {
-                                // All failed
-                                throw new Error(`ไม่สามารถควบคุมอุปกรณ์ได้ (ล้มเหลวทั้งหมด ${failed} อุปกรณ์)`);
-                            }
-                        } else {
-                            // No existing devices or positions found
-                            // Try to get device states from real API first (if status API is enabled)
-                            if (roomControlProxyService.isStatusEnabled()) {
-                                try {
-                                    console.log(`[RoomController] No local device data found, fetching from real API...`);
-                                    const statusData = await roomControlProxyService.fetchDeviceStatesByRoomId({ roomId });
-                                    const deviceStates = statusData.deviceStates || {};
-                                    const devices = deviceStates[deviceType] || [];
-                                    
-                                    if (Array.isArray(devices) && devices.length > 0) {
-                                        console.log(`[RoomController] Found ${devices.length} devices from real API, sending control commands`);
-                                        // Send command for each device found in real API
-                                        const controlPromises = devices.map((device, index) => 
-                                            roomControlProxyService.controlDeviceByRoomId({
-                                                roomId,
-                                                deviceType,
-                                                deviceIndex: device.device_index !== undefined ? device.device_index : index,
-                                                status,
-                                                settings,
-                                                requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
-                                            }).catch(err => {
-                                                console.error(`[RoomController] Failed to control device ${device.device_index !== undefined ? device.device_index : index}:`, err.message);
-                                                return { error: err.message, deviceIndex: device.device_index !== undefined ? device.device_index : index };
-                                            })
-                                        );
-                                        
-                                        const results = await Promise.allSettled(controlPromises);
-                                        const successful = results.filter(r => r.status === 'fulfilled' && !r.value?.error).length;
-                                        const failed = results.filter(r => r.status === 'rejected' || r.value?.error).length;
-                                        
-                                        console.log(`[RoomController] Control results: ${successful} successful, ${failed} failed`);
-                                        
-                                        if (failed > 0 && successful === 0) {
-                                            throw new Error(`ไม่สามารถควบคุมอุปกรณ์ได้ (ล้มเหลวทั้งหมด ${failed} อุปกรณ์)`);
-                                        }
-                                    } else {
-                                        // No devices found in real API either, try sending command with deviceIndex: null
-                                        console.log(`[RoomController] No devices found in real API, sending command with deviceIndex: null (control all)`);
-                                        const apiResult = await roomControlProxyService.controlDeviceByRoomId({
-                                            roomId,
-                                            deviceType,
-                                            deviceIndex: null,
-                                            status,
-                                            settings,
-                                            requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
-                                        });
-                                        console.log(`[RoomController] Real API response:`, apiResult);
-                                    }
-                                } catch (statusErr) {
-                                    console.warn(`[RoomController] Failed to fetch device states from real API:`, statusErr.message);
-                                    // Fallback: try sending command with deviceIndex: null
-                                    console.log(`[RoomController] Falling back to sending command with deviceIndex: null (control all)`);
-                                    const apiResult = await roomControlProxyService.controlDeviceByRoomId({
+                            const statusData = await roomControlProxyService.fetchDeviceStatesByRoomId({ roomId });
+                            const deviceStates = statusData.deviceStates || {};
+                            const devices = deviceStates[deviceType] || [];
+                            if (Array.isArray(devices) && devices.length > 0) {
+                                const controlPromises = devices.map((device, index) =>
+                                    roomControlProxyService.controlDeviceByRoomId({
                                         roomId,
                                         deviceType,
-                                        deviceIndex: null,
+                                        deviceIndex: device.device_index !== undefined ? device.device_index : index,
                                         status,
                                         settings,
                                         requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
-                                    });
-                                    console.log(`[RoomController] Real API response:`, apiResult);
+                                    }).catch(err => ({ error: err.message }))
+                                );
+                                const results = await Promise.allSettled(controlPromises);
+                                const successful = results.filter(r => r.status === 'fulfilled' && !r.value?.error).length;
+                                const failed = results.filter(r => r.status === 'rejected' || r.value?.error).length;
+                                if (failed > 0 && successful === 0) {
+                                    throw new Error(`ไม่สามารถควบคุมอุปกรณ์ได้ (ล้มเหลวทั้งหมด ${failed} อุปกรณ์)`);
                                 }
                             } else {
-                                // No status API, try sending command with deviceIndex: null
-                                console.log(`[RoomController] No local device data found and status API not enabled, sending command with deviceIndex: null (control all)`);
-                                const apiResult = await roomControlProxyService.controlDeviceByRoomId({
+                                await roomControlProxyService.controlDeviceByRoomId({
                                     roomId,
                                     deviceType,
                                     deviceIndex: null,
@@ -715,32 +790,30 @@ class RoomController {
                                     settings,
                                     requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
                                 });
-                                console.log(`[RoomController] Real API response:`, apiResult);
                             }
+                        } catch (statusErr) {
+                            console.warn('[RoomController] fetchDeviceStatesByRoomId failed:', statusErr.message);
+                            await roomControlProxyService.controlDeviceByRoomId({
+                                roomId,
+                                deviceType,
+                                deviceIndex: null,
+                                status,
+                                settings,
+                                requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
+                            });
                         }
                     } else {
-                        // Single device control
-                        const apiResult = await roomControlProxyService.controlDeviceByRoomId({
+                        await roomControlProxyService.controlDeviceByRoomId({
                             roomId,
                             deviceType,
-                            deviceIndex,
+                            deviceIndex: null,
                             status,
                             settings,
                             requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
                         });
-                        console.log(`[RoomController] Real API response:`, apiResult);
                     }
                 } catch (err) {
-                    console.error('[RoomController] Control API call failed:', {
-                        message: err.message,
-                        stack: err.stack,
-                        response: err.response?.data,
-                        status: err.response?.status,
-                        roomId,
-                        deviceType,
-                        deviceIndex,
-                        status,
-                    });
+                    console.error('[RoomController] Control API call failed:', err.message);
                     return res.status(502).json({
                         success: false,
                         message: 'ไม่สามารถสั่งควบคุมอุปกรณ์ได้ (Control API)',
@@ -748,115 +821,166 @@ class RoomController {
                     });
                 }
             }
-            
-            if (deviceIndex !== null) {
-                // Control single device
-                console.log(`[BACKEND DEBUG] Setting single device state: roomId=${roomId}, type=${deviceType}, index=${deviceIndex}, status=${status}`);
-                await DeviceState.setDeviceState(roomId, deviceType, deviceIndex, status, settings);
-            } else {
-                // Control all devices of this type (positions from rooms, then devices / device_positions)
-                let positions;
+
+            if (!isUsingRealAPI && homeAssistantService.isEnabled()) {
                 try {
-                    positions = await Room.getDevicePositions(roomId);
-                } catch (e) {
-                    try {
-                        positions = await Device.getPositionsByRoom(roomId);
-                    } catch (e2) {
-                        positions = await DevicePosition.getByRoom(roomId);
-                    }
-                }
-                const devicePositions = positions[deviceType] || [];
-                
-                console.log(`[BACKEND DEBUG] Setting multiple device states: roomId=${roomId}, type=${deviceType}`);
-                console.log(`[BACKEND DEBUG] Device positions from DB:`, devicePositions);
-                console.log(`[BACKEND DEBUG] Device positions count: ${devicePositions.length}`);
-                
-                // When using real API, only update existing devices - don't create new ones
-                if (isUsingRealAPI) {
-                    // Get existing device states only
-                    console.log(`[BACKEND DEBUG] Using real API - only updating existing device states`);
-                    const [existingStates] = await pool.query(
-                        `SELECT device_index FROM device_states 
-                         WHERE room_id = ? AND device_type = ?
-                         ORDER BY device_index ASC`,
-                        [roomId, deviceType]
-                    );
-                    
-                    if (existingStates.length === 0) {
-                        console.log(`[BACKEND DEBUG] No existing device states found - skipping DB update (real API handles control)`);
-                        // Don't create any devices when using real API
-                        // The real API controls the actual devices, we just sync status later
-                    } else {
-                        // Only update existing devices
-                        console.log(`[BACKEND DEBUG] Found ${existingStates.length} existing device states - updating them`);
-                        for (const state of existingStates) {
-                            await DeviceState.setDeviceState(roomId, deviceType, state.device_index, status, settings);
+                    const roomDevIds = (await DeviceState.listRoomDeviceIdsByType(roomId))[deviceType] || [];
+                    for (const did of roomDevIds) {
+                        try {
+                            await controlDeviceViaHomeAssistantByDeviceId(did, deviceType, status, settings);
+                        } catch (err) {
+                            console.warn(`[RoomController] HA control failed device_id=${did}:`, err.message);
                         }
-                        console.log(`[BACKEND DEBUG] Successfully updated ${existingStates.length} existing device states`);
                     }
-                } else {
-                    // Original logic for non-real-API mode
-                    // IMPORTANT: Check BOTH device positions AND existing device_states
-                    // Use the MAXIMUM count to ensure we update ALL existing devices
-                    let deviceCount = devicePositions.length;
-                    
-                    // Always check existing device_states
-                    console.log(`[BACKEND DEBUG] Checking existing device states for maximum count...`);
-                    const [existingStates] = await pool.query(
-                        `SELECT MAX(device_index) as max_index FROM device_states 
-                         WHERE room_id = ? AND device_type = ?`,
-                        [roomId, deviceType]
-                    );
-                    
-                    if (existingStates.length > 0 && existingStates[0].max_index !== null) {
-                        const existingCount = existingStates[0].max_index + 1;
-                        console.log(`[BACKEND DEBUG] Found ${existingCount} existing device_states`);
-                        // Use the MAXIMUM of positions count and existing states count
-                        deviceCount = Math.max(deviceCount, existingCount);
-                        console.log(`[BACKEND DEBUG] Using maximum count: ${deviceCount}`);
-                    } else if (deviceCount === 0) {
-                        // No device data found at all, create default devices
-                        console.log(`[BACKEND DEBUG] No device data found, creating default devices for type ${deviceType}`);
-                        const defaultCounts = {
-                            light: 14,
-                            ac: 3,
-                            erv: 3
-                        };
-                        deviceCount = defaultCounts[deviceType] || 0;
-                        if (deviceCount === 0) {
-                            console.error(`[BACKEND DEBUG] ERROR: Unknown device type ${deviceType}`);
-                            return res.status(400).json({
-                                success: false,
-                                message: `ไม่รู้จักประเภทอุปกรณ์ ${deviceType}`
-                            });
+                    if (areaId != null) {
+                        const areaDevIds = (await DeviceState.listAreaDeviceIdsByType(areaId))[deviceType] || [];
+                        for (const did of areaDevIds) {
+                            try {
+                                await controlDeviceViaHomeAssistantByDeviceId(did, deviceType, status, settings);
+                            } catch (err) {
+                                console.warn(`[RoomController] HA area control failed device_id=${did}:`, err.message);
+                            }
                         }
-                        console.log(`[BACKEND DEBUG] Creating ${deviceCount} default ${deviceType} devices with status=false`);
                     }
-                    
-                    const states = Array(deviceCount).fill(null).map(() => ({
-                        status: status,
-                        settings: settings
-                    }));
-                    
-                    console.log(`[BACKEND DEBUG] Creating ${states.length} device states with status=${status}`);
-                    const result = await DeviceState.setMultipleStates(roomId, deviceType, states);
-                    console.log(`[BACKEND DEBUG] setMultipleStates result:`, result);
-                    console.log(`[BACKEND DEBUG] Successfully saved ${states.length} device states to database`);
+                } catch (err) {
+                    console.warn('[RoomController] Direct HA control failed:', err.message);
                 }
             }
-            
+
+            if (deviceIds.length > 0) {
+                if (isUsingRealAPI) {
+                    for (const deviceId of deviceIds) {
+                        await DeviceState.upsertRoomStateByDeviceId(roomId, deviceId, deviceType, status, settings);
+                    }
+                } else {
+                    await DeviceState.setMultipleStates(
+                        roomId,
+                        deviceType,
+                        deviceIds.map(() => ({ status, settings }))
+                    );
+                }
+            } else if (!isUsingRealAPI) {
+                return res.json({
+                    success: true,
+                    message: `ไม่มีอุปกรณ์ ${deviceType} ในห้องนี้`,
+                });
+            }
+
             res.json({
                 success: true,
-                message: 'ควบคุมอุปกรณ์สำเร็จ'
+                message: 'ควบคุมอุปกรณ์สำเร็จ',
             });
         } catch (error) {
             console.error(`[BACKEND DEBUG] Error in controlDevice:`, error);
-            console.error(`[BACKEND DEBUG] Error stack:`, error.stack);
             res.status(500).json({
                 success: false,
                 message: 'เกิดข้อผิดพลาด',
-                error: error.message
+                error: error.message,
             });
+        }
+    }
+
+    // Control device by device_id (preferred)
+    // POST /rooms/:id/devices/by-id/:deviceId
+    async controlDeviceById(req, res) {
+        try {
+            const roomId = parseInt(req.params.id, 10);
+            const deviceId = parseInt(req.params.deviceId, 10);
+            if (Number.isNaN(roomId) || Number.isNaN(deviceId)) {
+                return res.status(400).json({ success: false, message: 'Invalid roomId/deviceId' });
+            }
+
+            const { status, settings, temperature, mode, speed } = req.body;
+
+            // Validate device belongs to this room
+            const [rows] = await pool.query(
+                `SELECT id, room_id,
+                        LOWER(COALESCE(NULLIF(LTRIM(RTRIM(device_type)), ''), NULLIF(LTRIM(RTRIM(code)), ''))) AS t
+                 FROM devices
+                 WHERE id = ? AND room_id = ? AND (disable = 0 OR disable IS NULL)`,
+                [deviceId, roomId]
+            );
+            if (!rows || rows.length === 0) {
+                return res.status(404).json({ success: false, message: 'Device not found in this room' });
+            }
+
+            let deviceType = rows[0].t;
+            if (deviceType === 'air') deviceType = 'ac';
+            if (deviceType === 'fan' || deviceType === 'exhaust_fan' || deviceType === 'ventilation_fan') deviceType = 'vent_fan';
+            if (!['light', 'ac', 'erv', 'vent_fan'].includes(deviceType)) {
+                return res.status(400).json({ success: false, message: 'Unsupported device type for control' });
+            }
+
+            // Normalize boolean status
+            let newStatus = status;
+            if (typeof newStatus === 'string') newStatus = newStatus === 'on' || newStatus === 'true' || newStatus === '1';
+            if (typeof newStatus === 'number') newStatus = newStatus === 1;
+
+            // Build settings if split fields provided
+            let newSettings = settings ?? null;
+            if (!newSettings && (temperature !== undefined || mode !== undefined || speed !== undefined)) {
+                newSettings = {};
+                if (temperature !== undefined) newSettings.temperature = temperature;
+                if (mode !== undefined) newSettings.mode = mode;
+                if (speed !== undefined) newSettings.speed = speed;
+            }
+
+            if (typeof status === 'undefined') {
+                const [cur] = await pool.query('SELECT status FROM device_states WHERE device_id = ?', [deviceId]);
+                newStatus = cur && cur[0] ? !!cur[0].status : false;
+            }
+
+            const room = await Room.findById(roomId);
+            const areaId = room && room.area_id != null ? Number(room.area_id) : null;
+            const isUsingRealAPI = roomControlProxyService.isControlEnabled();
+
+            // Control API ก่อน (ถ้าเปิด) — ล้มเหลวแล้วไม่อัปเดต DB
+            if (isUsingRealAPI) {
+                try {
+                    const extIdx = await DeviceState.getRoomDeviceIndexForDeviceId(roomId, deviceType, deviceId);
+                    if (extIdx === null) {
+                        return res.status(400).json({
+                            success: false,
+                            message: 'ไม่พบลำดับอุปกรณ์สำหรับ Control API',
+                        });
+                    }
+                    await roomControlProxyService.controlDeviceByRoomId({
+                        roomId,
+                        deviceType,
+                        deviceIndex: extIdx,
+                        status: newStatus,
+                        settings: newSettings,
+                        requestedBy: req.user ? { id: req.user.id, role: req.user.role } : null,
+                    });
+                } catch (err) {
+                    console.error('[RoomController] controlDeviceById Control API failed:', err.message);
+                    return res.status(502).json({
+                        success: false,
+                        message: 'ไม่สามารถสั่งควบคุมอุปกรณ์ได้ (Control API)',
+                        error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+                    });
+                }
+            } else if (homeAssistantService.isEnabled()) {
+                try {
+                    const haResult = await controlDeviceViaHomeAssistantByDeviceId(deviceId, deviceType, newStatus, newSettings);
+                    if (haResult.skipped) {
+                        console.log(`[RoomController] controlDeviceById: no entity_id for device_id=${deviceId}, skip HA`);
+                    }
+                } catch (err) {
+                    console.warn('[RoomController] controlDeviceById HA failed:', err.message);
+                }
+            }
+
+            await DeviceState.upsertRoomStateByDeviceId(roomId, deviceId, deviceType, newStatus, newSettings);
+
+            res.json({
+                success: true,
+                message: 'Device state updated',
+                data: { roomId, deviceId, deviceType, status: !!newStatus, settings: newSettings }
+            });
+        } catch (error) {
+            console.error('Error controlling device by id:', error);
+            res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาด', error: error.message });
         }
     }
 
@@ -891,11 +1015,13 @@ class RoomController {
         }
     }
 
-    // Save device positions (ลง rooms; fallback ไป devices / device_positions)
+    // Save device positions (ลงตาราง devices โดยใช้ x, y columns)
     async saveDevicePositions(req, res) {
         try {
             const roomId = parseInt(req.params.id);
             const { positions } = req.body;
+            
+            console.log('[RoomController] saveDevicePositions roomId=', roomId, 'positions=', JSON.stringify(positions));
             
             if (!positions) {
                 return res.status(400).json({
@@ -904,20 +1030,9 @@ class RoomController {
                 });
             }
             
-            try {
-                await Room.setDevicePositions(roomId, positions);
-                console.log('[RoomController] บันทึกตำแหน่งลง rooms แล้ว roomId=', roomId);
-            } catch (e1) {
-                console.warn('[RoomController] Room.setDevicePositions ล้มเหลว:', e1.message);
-                try {
-                    await Device.setPositionsByRoom(roomId, positions);
-                    console.log('[RoomController] บันทึกตำแหน่งลง devices (fallback) roomId=', roomId);
-                } catch (e2) {
-                    console.warn('[RoomController] Device fallback ล้มเหลว:', e2.message);
-                    await DevicePosition.setAllPositions(roomId, positions);
-                    console.log('[RoomController] บันทึกตำแหน่งลง device_positions (fallback)');
-                }
-            }
+            // บันทึกลงตาราง devices (x, y columns)
+            await Room.setDevicePositions(roomId, positions);
+            console.log('[RoomController] บันทึกตำแหน่งลง devices table แล้ว roomId=', roomId);
             
             res.json({
                 success: true,
@@ -932,25 +1047,56 @@ class RoomController {
         }
     }
 
-    // Get environmental data
+    // Get environmental data (ล่าสุดจาก environmental_data ตาม room_id)
     async getEnvironmentalData(req, res) {
         try {
-            const roomId = parseInt(req.params.id);
-            
-            // Sample environmental data (can be replaced with actual sensor data)
-            const environmentalData = {
-                co2: 497,
-                temp: 25.8,
-                noise: 45.5,
-                humidity: 57,
-                motion: 'Active',
-                pm25: 46,
-                pm10: 55,
-                pressure: 978.3,
-                hcho: 0.02,
-                tvoc: 1.45
-            };
-            
+            const roomId = parseInt(req.params.id, 10);
+            if (Number.isNaN(roomId)) {
+                return res.status(400).json({ success: false, message: 'room id ไม่ถูกต้อง' });
+            }
+
+            let row = null;
+            try {
+                const [rows] = await pool.query(
+                    `SELECT TOP 1 temperature, humidity, co2, tvoc, pressure, pm25, pm10, hcho, noise, timestamp
+                     FROM environmental_data
+                     WHERE room_id = ?
+                     ORDER BY timestamp DESC`,
+                    [roomId]
+                );
+                row = rows && rows[0];
+            } catch (dbErr) {
+                console.warn('[RoomController] environmental_data query failed:', dbErr.message);
+            }
+
+            const environmentalData = row
+                ? {
+                    co2: row.co2 != null ? parseFloat(row.co2) : null,
+                    temp: row.temperature != null ? parseFloat(row.temperature) : null,
+                    noise: row.noise != null ? parseFloat(row.noise) : null,
+                    humidity: row.humidity != null ? parseFloat(row.humidity) : null,
+                    motion: null,
+                    pm25: row.pm25 != null ? parseFloat(row.pm25) : null,
+                    pm10: row.pm10 != null ? parseFloat(row.pm10) : null,
+                    pressure: row.pressure != null ? parseFloat(row.pressure) : null,
+                    hcho: row.hcho != null ? parseFloat(row.hcho) : null,
+                    tvoc: row.tvoc != null ? parseFloat(row.tvoc) : null,
+                    timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : null,
+                }
+                : {
+                    co2: null,
+                    temp: null,
+                    noise: null,
+                    humidity: null,
+                    motion: null,
+                    pm25: null,
+                    pm10: null,
+                    pressure: null,
+                    hcho: null,
+                    tvoc: null,
+                    timestamp: null,
+                };
+
             res.json({
                 success: true,
                 data: environmentalData

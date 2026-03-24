@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js",
+    "dev": "node --watch server.js",
     "seed:doors": "node scripts/seed_door_devices.js",
     "check-status": "node scripts/check-status.js",
     "discover-cctv": "node scripts/discover-cctv-endpoints.js",

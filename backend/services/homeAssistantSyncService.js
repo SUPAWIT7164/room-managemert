@@ -1,5 +1,6 @@
 const homeAssistantService = require('./homeAssistantService');
 const DeviceState = require('../models/DeviceState');
+const { pool } = require('../config/database');
 
 /**
  * Home Assistant Sync Service
@@ -7,31 +8,37 @@ const DeviceState = require('../models/DeviceState');
  */
 class HomeAssistantSyncService {
     constructor() {
-        // Mapping ของ device IDs กับ room_id และ device_index
-        // สามารถขยายได้ในอนาคต
+        // Mapping HA sync keys → room_id + entityId; DB row หาได้จาก entity_id ในตาราง devices
         this.deviceMappings = {
-            // Air Conditioner
             'CC3F1D03BAE3': {
-                roomId: 28, // Room ID สำหรับ Mercury room
+                roomId: 28,
                 deviceType: 'ac',
-                deviceIndex: 1, // AC index 1 (air_02)
                 entityId: 'climate.air_02'
             },
-            // ERV
             'ERV_U1': {
-                roomId: 28, // Room ID สำหรับ Mercury room
+                roomId: 28,
                 deviceType: 'erv',
-                deviceIndex: 0, // ERV index 0
                 entityId: 'switch.erv_u1_power'
             },
-            // Light
             'LIGHTS_17': {
-                roomId: 28, // Room ID สำหรับ Mercury room
+                roomId: 28,
                 deviceType: 'light',
-                deviceIndex: 0, // Light index 0
                 entityId: 'light.lights_17'
             }
         };
+    }
+
+    /**
+     * คืน devices.id สำหรับแถวใน room ที่ entity_id ตรงกับ mapping
+     */
+    async resolveDevicesRowId(mapping) {
+        const [rows] = await pool.query(
+            `SELECT id FROM devices
+             WHERE room_id = ? AND LTRIM(RTRIM(ISNULL(entity_id,''))) = ?
+               AND (disable = 0 OR disable IS NULL)`,
+            [mapping.roomId, String(mapping.entityId).trim()]
+        );
+        return rows && rows[0] ? rows[0].id : null;
     }
 
     /**
@@ -46,7 +53,7 @@ class HomeAssistantSyncService {
 
         const mapping = this.deviceMappings[deviceId];
         if (!mapping || mapping.deviceType !== 'ac') {
-            throw new Error(`ไม่พบ mapping สำหรับ device ID: ${deviceId}`);
+            throw new Error(`ไม่พบ mapping สำหรับ device ID: ${deviceId}`);    
         }
 
         try {
@@ -110,11 +117,14 @@ class HomeAssistantSyncService {
                 attributes: haState.attributes
             });
 
-            // บันทึกลง DB
-            await DeviceState.setDeviceState(
+            const dbDeviceId = await this.resolveDevicesRowId(mapping);
+            if (!dbDeviceId) {
+                throw new Error(`ไม่พบ devices.id สำหรับ entity ${mapping.entityId} ในห้อง ${mapping.roomId}`);
+            }
+            await DeviceState.upsertRoomStateByDeviceId(
                 mapping.roomId,
+                dbDeviceId,
                 mapping.deviceType,
-                mapping.deviceIndex,
                 isOn,
                 settings
             );
@@ -126,7 +136,7 @@ class HomeAssistantSyncService {
                 deviceId,
                 roomId: mapping.roomId,
                 deviceType: mapping.deviceType,
-                deviceIndex: mapping.deviceIndex,
+                devicesRowId: dbDeviceId,
                 status: isOn,
                 settings,
                 haState: haState.state,
@@ -242,11 +252,14 @@ class HomeAssistantSyncService {
                 }
             });
 
-            // บันทึกลง DB
-            await DeviceState.setDeviceState(
+            const dbDeviceId = await this.resolveDevicesRowId(mapping);
+            if (!dbDeviceId) {
+                throw new Error(`ไม่พบ devices.id สำหรับ entity ${mapping.entityId} ในห้อง ${mapping.roomId}`);
+            }
+            await DeviceState.upsertRoomStateByDeviceId(
                 mapping.roomId,
+                dbDeviceId,
                 mapping.deviceType,
-                mapping.deviceIndex,
                 isOn,
                 settings
             );
@@ -258,7 +271,7 @@ class HomeAssistantSyncService {
                 deviceId,
                 roomId: mapping.roomId,
                 deviceType: mapping.deviceType,
-                deviceIndex: mapping.deviceIndex,
+                devicesRowId: dbDeviceId,
                 status: isOn,
                 settings,
                 haState: haState.state,
@@ -309,11 +322,14 @@ class HomeAssistantSyncService {
                 attributes: haState.attributes
             });
 
-            // บันทึกลง DB
-            await DeviceState.setDeviceState(
+            const dbDeviceId = await this.resolveDevicesRowId(mapping);
+            if (!dbDeviceId) {
+                throw new Error(`ไม่พบ devices.id สำหรับ entity ${mapping.entityId} ในห้อง ${mapping.roomId}`);
+            }
+            await DeviceState.upsertRoomStateByDeviceId(
                 mapping.roomId,
+                dbDeviceId,
                 mapping.deviceType,
-                mapping.deviceIndex,
                 isOn,
                 settings
             );
@@ -325,7 +341,7 @@ class HomeAssistantSyncService {
                 deviceId,
                 roomId: mapping.roomId,
                 deviceType: mapping.deviceType,
-                deviceIndex: mapping.deviceIndex,
+                devicesRowId: dbDeviceId,
                 status: isOn,
                 settings,
                 haState: haState.state,

@@ -21,6 +21,9 @@ const controls = reactive({
   light: false,
 })
 
+/** index → devices.id จาก GET /rooms/:id/devices → deviceIdsByType.light */
+const lightDeviceIds = ref({})
+
 const maxLightBulbs = 14 // Maximum number of light bulbs
 
 const fetchRooms = async () => {
@@ -58,6 +61,12 @@ const loadRoomDevices = async () => {
     const response = await api.get(`/rooms/${selectedRoomId.value}/devices`)
     if (response.data && response.data.data) {
       const devices = response.data.data
+      if (devices.deviceIdsByType?.light?.length) {
+        lightDeviceIds.value = {}
+        devices.deviceIdsByType.light.forEach((id, i) => {
+          lightDeviceIds.value[i] = id
+        })
+      }
       if (devices.deviceStates && devices.deviceStates.light) {
         // Load light states
         const lightStatesToLoad = devices.deviceStates.light.slice(0, maxLightBulbs)
@@ -120,7 +129,9 @@ const toggleDevice = async (index) => {
       brightness: !isOn ? (lightBrightness[index] || 100) : 0,
     }
 
-    await api.post(`/rooms/${selectedRoomId.value}/devices/light/${index}`, payload)
+    const deviceId = lightDeviceIds.value[index]
+    if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ light[${index}]`)
+    await api.post(`/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`, payload)
     
     // Update control switch
     controls.light = deviceStates.light.some(state => state)
@@ -150,7 +161,9 @@ const updateBrightness = async (index, brightness) => {
       brightness: brightness,
     }
 
-    await api.post(`/rooms/${selectedRoomId.value}/devices/light/${index}`, payload)
+    const deviceId = lightDeviceIds.value[index]
+    if (deviceId == null) throw new Error(`ไม่มี device_id สำหรับ light[${index}]`)
+    await api.post(`/rooms/${selectedRoomId.value}/devices/by-id/${deviceId}`, payload)
     
     // Update control switch
     controls.light = deviceStates.light.some(state => state)

@@ -50,6 +50,17 @@ const CONTROLLABLE_DEVICE_TYPES = [
     syncPath: 'erv',
     order: 3,
   },
+  {
+    key: 'vent_fan',
+    apiPath: 'vent-fan',
+    label: 'พัดลมระบายอากาศ',
+    labelEn: 'Ventilation Fan',
+    icon: 'tabler-fan',
+    description: 'ควบคุมพัดลมระบายอากาศ',
+    actions: ['on', 'off'],
+    hasStatus: true,
+    order: 4,
+  },
 ];
 
 /**

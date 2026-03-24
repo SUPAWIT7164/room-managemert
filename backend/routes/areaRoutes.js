@@ -5,6 +5,9 @@ const { authenticate, isAdmin } = require('../middleware/auth');
 
 // Public routes
 router.get('/', areaController.getAll);
+router.get('/:id/devices', areaController.getDevices);
+// New (device_id-based) control route
+router.post('/:id/devices/by-id/:deviceId', areaController.controlDeviceById);
 router.get('/:id', areaController.getById);
 router.get('/:id/rooms', areaController.getWithRooms);
 

@@ -60,18 +60,15 @@
 
 ```javascript
 this.deviceMappings = {
-  // ตัวอย่าง: ไฟตัวที่ 2 ในห้อง Mercury
+  // ต้องมีแถวใน `devices` ที่ room_id + entity_id ตรงกับ mapping — sync จะหา devices.id อัตโนมัติ
   'LIGHTS_18': {
     roomId: 28,
     deviceType: 'light',
-    deviceIndex: 1,   // ตัวที่ 2 ในห้องนี้ (0-based)
     entityId: 'light.lights_18'
   },
-  // แอร์ตัวใหม่ในห้องอื่น
   'CC3F1D03XXXX': {
     roomId: 28,
     deviceType: 'ac',
-    deviceIndex: 2,
     entityId: 'climate.air_03'
   },
   // ...
@@ -81,8 +78,7 @@ this.deviceMappings = {
 - **Key:** ตัวระบุอุปกรณ์ (เช่น device_id, IP, หรือชื่อที่ใช้ในระบบ)
 - **roomId:** id ห้องในตาราง `rooms`
 - **deviceType:** ต้องตรงกับ `key` ใน `deviceTypes.js` (เช่น `light`, `ac`, `erv`)
-- **deviceIndex:** ลำดับในห้องสำหรับประเภทนั้น (0, 1, 2, ...)
-- **entityId:** entity ใน Home Assistant (เช่น `light.xxx`, `climate.xxx`, `switch.xxx`)
+- **entityId:** entity ใน Home Assistant (เช่น `light.xxx`, `climate.xxx`, `switch.xxx`) — ใช้ค้นหา `devices.id` แล้วเขียน `device_states.device_id`
 
 ### 2.2 เพิ่ม method sync สำหรับประเภทใหม่ (ถ้าเป็นประเภทใหม่)
 
@@ -100,10 +96,11 @@ async syncFan(deviceId) {
   const stateResult = await homeAssistantService.getState(mapping.entityId);
   const haState = stateResult.state;
   const isOn = haState.state === 'on';
-  await DeviceState.setDeviceState(
+  const dbDeviceId = await this.resolveDevicesRowId(mapping); // entity_id → devices.id
+  await DeviceState.upsertRoomStateByDeviceId(
     mapping.roomId,
+    dbDeviceId,
     mapping.deviceType,
-    mapping.deviceIndex,
     isOn,
     null
   );
@@ -128,20 +125,10 @@ async syncFan(deviceId) {
 
 **ไฟล์:** `backend/models/DeviceState.js`
 
-- ใน `getByRoom()` มี object `grouped` และ `maxIndices` กำหนดประเภทที่รองรับ
-- **ถ้าเพิ่มประเภทใหม่** (เช่น `fan`) ต้องเพิ่มในทั้งสองที่:
+- ใน `listRoomDeviceIdsByType()` / `getByRoom()` มี object `out` / `grouped` ตามประเภท (light, ac, erv)
+- **ถ้าเพิ่มประเภทใหม่** (เช่น `fan`) ต้องเพิ่ม key ใน `listRoomDeviceIdsByType`, `listAreaDeviceIdsByType`, และ `getByRoom`/`getByArea` ให้สอดคล้อง
 
-```javascript
-const grouped = {
-  light: [],
-  ac: [],
-  erv: [],
-  fan: []   // เพิ่ม
-};
-const maxIndices = { light: -1, ac: -1, erv: -1, fan: -1 };  // เพิ่ม
-```
-
-- ตาราง `device_states` ใช้คอลัมน์ `device_type` เป็น string อยู่แล้ว ไม่ต้องเปลี่ยน schema
+- ตาราง `device_states` ใช้ **device_id** + `device_type` (string); ไม่ใช้ `device_index` (ลบแล้วบน MSSQL หลังรัน migration ที่เกี่ยวข้อง)
 
 ---
 
@@ -179,7 +166,7 @@ const maxIndices = { light: -1, ac: -1, erv: -1, fan: -1 };  // เพิ่ม
   - Logic ส่วนใหญ่ใช้ `deviceType` จาก request ไปเรียก `roomControlProxyService.controlDeviceByRoomId` และจัดการกับ `device_states` ทั่วไป
   - ถ้าไม่มีเงื่อนไขเฉพาะประเภท (เช่น แอร์มีโหมด/อุณหภูมิ) การเพิ่มประเภทใหม่อาจไม่ต้องแก้ตรงนี้ เพียงให้ type ใหม่ส่งมาที่ route ได้
 
-- **Route มีอยู่แล้ว:** `POST /rooms/:id/devices/:type/:index?` จึงรองรับ type ใหม่โดยไม่ต้องเพิ่ม route
+- **Route:** `POST /rooms/:id/devices/:type` (ควบคุมทุกตัวของประเภทนั้น) และ `POST /rooms/:id/devices/by-id/:deviceId` (รายตัว)
 
 ---
 
@@ -264,7 +251,7 @@ router.post('/sync/fan/:deviceId', deviceController.syncFan);
 |---|-----|------|
 | 1 | เพิ่มใน CONTROLLABLE_DEVICE_TYPES | `backend/config/deviceTypes.js` |
 | 2 | เพิ่ม deviceMappings + sync method + syncAll | `backend/services/homeAssistantSyncService.js` |
-| 3 | เพิ่ม type ใน grouped และ maxIndices | `backend/models/DeviceState.js` |
+| 3 | เพิ่ม type ใน `listRoomDeviceIdsByType` / `getByRoom` (และ area ถ้าใช้) | `backend/models/DeviceState.js` |
 | 4 | เพิ่ม type ใน positions + types | `backend/models/Device.js` |
 | 5 | เพิ่มใน HA_DEVICE_TYPES | `backend/controllers/deviceController.js` |
 | 6 | เพิ่ม route + controller (control, status, sync) | `deviceRoutes.js`, `deviceController.js` |
@@ -276,8 +263,8 @@ router.post('/sync/fan/:deviceId', deviceController.syncFan);
 
 ## 11. กรณีเพิ่มแค่ “ตัวใหม่” (ห้องใหม่ / ตัวที่ 2, 3 ของ light/ac/erv)
 
-- **Backend:** เพิ่มแค่ 1 entry ใน `homeAssistantSyncService.deviceMappings` (roomId, deviceType, deviceIndex, entityId)
-- **DB:** อาจต้องมีแถวใน `devices` (room_id, device_type, x, y) และเมื่อมี device_states จาก sync สถานะจะแสดงในรายการอุปกรณ์และหน้า control ตาม room/index ที่ map ไว้
+- **Backend:** เพิ่มแค่ 1 entry ใน `homeAssistantSyncService.deviceMappings` (roomId, deviceType, entityId)
+- **DB:** ต้องมีแถวใน `devices` (room_id, device_type, entity_id, …) ให้ตรงกับ mapping — sync เขียน `device_states` ด้วย **device_id**
 - **Frontend:** โดยทั่วไปไม่ต้องแก้ ถ้า UI วนจากจำนวนสถานะ/ตำแหน่งที่ได้จาก API อยู่แล้ว
 
 ถ้าต้องการให้ประเภทใหม่ทำงานครบเหมือน light/ac/erv (แสดงในรายการ, sync จาก HA, ควบคุมจาก room control) ให้ทำครบทุกขั้นที่เกี่ยวข้องกับ “ประเภท” ตามตารางด้านบน

@@ -93,8 +93,8 @@ class Room {
 
     static async create(data) {
         const [result] = await pool.query(
-            `INSERT INTO rooms (name, description, area_id, room_type_id, capacity, facilities, auto_approve, automation_enabled, disable) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+            `INSERT INTO rooms (name, description, area_id, room_type_id, capacity, facilities, auto_approve, automation_enabled, disable, image) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
             [
                 data.name,
                 data.description || null,
@@ -103,7 +103,8 @@ class Room {
                 data.capacity || 1,
                 data.facilities || null,
                 data.auto_approve ? 1 : 0,
-                data.automation_enabled ? 1 : 0
+                data.automation_enabled ? 1 : 0,
+                data.image || null
             ]
         );
         return this.findById(result.insertId);
@@ -114,7 +115,7 @@ class Room {
         const updates = [];
         const params = [];
 
-            const allowedFields = ['name', 'description', 'area_id', 'room_type_id', 'capacity', 'facilities', 'auto_approve', 'automation_enabled', 'disable', 'is_active', 'image'];
+            const allowedFields = ['name', 'description', 'area_id', 'room_type_id', 'capacity', 'facilities', 'auto_approve', 'automation_enabled', 'disable', 'is_active', 'image', 'x1', 'y1', 'x2', 'y2'];
         
         for (const field of allowedFields) {
             if (data[field] !== undefined) {
@@ -140,9 +141,17 @@ class Room {
                             value = null;
                         } else if (field === 'room_type_id' || field === 'area_id') {
                             value = null;
+                        } else if (field === 'x1' || field === 'y1' || field === 'x2' || field === 'y2') {
+                            value = null;
                         } else {
                             continue; // Skip null values for numeric fields
                         }
+                    }
+
+                    // Convert x1,y1,x2,y2 to number
+                    if ((field === 'x1' || field === 'y1' || field === 'x2' || field === 'y2') && value != null) {
+                        value = Number(value);
+                        if (Number.isNaN(value)) continue;
                     }
                     
                     updates.push(`${field} = ?`);
@@ -212,66 +221,22 @@ class Room {
     }
 
     /**
-     * โหลดตำแหน่งอุปกรณ์จากตาราง rooms (x1,y1,x2,y2 หรือ device_positions JSON)
+     * โหลดตำแหน่งอุปกรณ์จากตาราง devices (x, y) โดยตรง
+     * ไม่ใช้ rooms.device_positions JSON แล้ว
      * คืนค่า { light: [{x,y}], ac: [...], erv: [...] } สำหรับหน้า /rooms/control
      */
     static async getDevicePositions(roomId) {
-        const [rows] = await pool.query(
-            'SELECT device_positions, x1, y1, x2, y2 FROM rooms WHERE id = ?',
-            [roomId]
-        );
-        const row = rows && rows[0];
-        if (!row) return { light: [], ac: [], erv: [] };
-        const empty = { light: [], ac: [], erv: [] };
-        if (row.device_positions) {
-            try {
-                const parsed = typeof row.device_positions === 'string' ? JSON.parse(row.device_positions) : row.device_positions;
-                if (parsed && typeof parsed === 'object') {
-                    return {
-                        light: Array.isArray(parsed.light) ? parsed.light : empty.light,
-                        ac: Array.isArray(parsed.ac) ? parsed.ac : empty.ac,
-                        erv: Array.isArray(parsed.erv) ? parsed.erv : empty.erv
-                    };
-                }
-            } catch (e) {
-                // fallback to x1,y1,x2,y2 or empty
-            }
-        }
-        const x1 = row.x1 != null ? Number(row.x1) : null;
-        const y1 = row.y1 != null ? Number(row.y1) : null;
-        const x2 = row.x2 != null ? Number(row.x2) : null;
-        const y2 = row.y2 != null ? Number(row.y2) : null;
-        if (x1 == null || y1 == null || x2 == null || y2 == null) return empty;
-        const midX = (x1 + x2) / 2;
-        const midY = (y1 + y2) / 2;
-        return {
-            light: [{ x: x1, y: y1 }, { x: midX, y: y1 }, { x: x2, y: y1 }],
-            ac: [{ x: x1, y: midY }, { x: midX, y: midY }, { x: x2, y: midY }],
-            erv: [{ x: x1, y: y2 }, { x: midX, y: y2 }, { x: x2, y: y2 }]
-        };
+        const Device = require('./Device');
+        return await Device.getPositionsByRoom(roomId);
     }
 
     /**
-     * บันทึกตำแหน่งอุปกรณ์ลงตาราง rooms (device_positions JSON + x1,y1,x2,y2 เป็น bounding box)
+     * บันทึกตำแหน่งอุปกรณ์ลงตาราง devices (x, y) โดยตรง
+     * ไม่ใช้ rooms.device_positions JSON แล้ว
      */
     static async setDevicePositions(roomId, positions) {
-        const light = Array.isArray(positions.light) ? positions.light : [];
-        const ac = Array.isArray(positions.ac) ? positions.ac : [];
-        const erv = Array.isArray(positions.erv) ? positions.erv : [];
-        const all = [...light, ...ac, ...erv].filter(p => p && (p.x != null || p.x1 != null) && (p.y != null || p.y1 != null));
-        let x1 = null, y1 = null, x2 = null, y2 = null;
-        if (all.length > 0) {
-            x1 = Math.min(...all.map(p => Number(p.x ?? p.x1)));
-            y1 = Math.min(...all.map(p => Number(p.y ?? p.y1)));
-            x2 = Math.max(...all.map(p => Number(p.x ?? p.x1)));
-            y2 = Math.max(...all.map(p => Number(p.y ?? p.y1)));
-        }
-        const devicePositionsJson = JSON.stringify({ light, ac, erv });
-        await pool.query(
-            'UPDATE rooms SET device_positions = ?, x1 = ?, y1 = ?, x2 = ?, y2 = ? WHERE id = ?',
-            [devicePositionsJson, x1, y1, x2, y2, roomId]
-        );
-        return true;
+        const Device = require('./Device');
+        return await Device.setPositionsByRoom(roomId, positions);
     }
 }
 

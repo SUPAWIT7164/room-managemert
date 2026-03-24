@@ -39,7 +39,7 @@ class DevicePosition {
             await connection.beginTransaction();
             
             for (const [deviceType, positions] of Object.entries(allPositions)) {
-                if (['light', 'ac', 'erv'].includes(deviceType)) {
+                if (['light', 'ac', 'erv', 'vent_fan'].includes(deviceType)) {
                     const positionsJson = JSON.stringify(positions);
                     await connection.query(
                         `INSERT INTO device_positions (room_id, device_type, positions)
