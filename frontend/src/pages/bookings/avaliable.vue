@@ -180,6 +180,28 @@ const isPastSlot = (date, time) => {
 }
 const isLunch = (t) => t === '12:00' || t === '12:30'
 
+const timeToMinutes = (t) => {
+  if (!t || typeof t !== 'string') return null
+  const m = t.trim().match(/^(\d{1,2}):(\d{2})$/)
+  if (!m) return null
+  const hh = Number(m[1])
+  const mm = Number(m[2])
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null
+  return hh * 60 + mm
+}
+
+// End index is the first slot whose start >= endTime; if endTime exceeds table -> timeSlots.length
+const getEndSlotIndex = (endTime) => {
+  const endMin = timeToMinutes(endTime)
+  if (endMin == null) return -1
+  for (let i = 0; i < timeSlots.length; i++) {
+    const slotMin = timeToMinutes(timeSlots[i]?.start)
+    if (slotMin == null) continue
+    if (slotMin >= endMin) return i
+  }
+  return timeSlots.length
+}
+
 // Same logic as calendar: filter by room, date, time, cancel/reject, and status + room auto_approve
 // New structure: status BIT (1 = approved, 0/NULL = pending)
 const getBookingForSlot = (roomId, date, time) => {
@@ -232,10 +254,10 @@ const getBookingForSlot = (roomId, date, time) => {
     if (slotMin < 0) return false
     const startMin = timeSlots.findIndex(s => s.start === start.time)
     if (startMin < 0) return false
-    const endMin = end ? timeSlots.findIndex(s => s.start === end.time) : startMin + 1
-    const endSlotIndex = endMin >= 0 ? endMin : startMin + 1
+    const endSlotIndex = end ? getEndSlotIndex(end.time) : (startMin + 1)
+    const safeEndSlotIndex = endSlotIndex > startMin ? endSlotIndex : (startMin + 1)
     // Return true if this slot is within the booking range
-    const isInRange = slotMin >= startMin && slotMin < endSlotIndex
+    const isInRange = slotMin >= startMin && slotMin < safeEndSlotIndex
     if (isInRange && String(rid) === String(roomId)) {
       console.log(`[Available] Found booking ${b.id} for slot:`, {
         roomId,
@@ -245,7 +267,7 @@ const getBookingForSlot = (roomId, date, time) => {
         bookingEnd: end?.time,
         slotMin,
         startMin,
-        endSlotIndex,
+        endSlotIndex: safeEndSlotIndex,
         isInRange
       })
     }
@@ -268,9 +290,10 @@ const getBookingSpan = (roomId, date, time) => {
   const end = parseDt(b.end_datetime || b.end || b.end_time)
   if (!start || !end) return 1
   const si = timeSlots.findIndex(s => s.start === start.time)
-  const ei = timeSlots.findIndex(s => s.start === end.time)
   if (si < 0) return 1
-  return Math.max(1, (ei >= 0 ? ei : si + 1) - si)
+  const ei = getEndSlotIndex(end.time)
+  const safeEi = ei > si ? ei : (si + 1)
+  return Math.max(1, safeEi - si)
 }
 
 // ช่องนี้อยู่ภายในการจอง (ไม่ใช่ช่องเริ่ม) — ไม่ต้องเรนเดอร์ <td> เพื่อไม่ให้มีคอลัมน์เกิน
@@ -311,9 +334,9 @@ const isSlotPartOfBooking = (roomId, date, time) => {
     if (!bStart || bStart.date !== date) continue
     const startIndex = timeSlots.findIndex(s => s.start === bStart.time)
     if (startIndex < 0) continue
-    const endIndex = bEnd ? timeSlots.findIndex(s => s.start === bEnd.time) : startIndex + 1
-    const endSlotIndex = endIndex >= 0 ? endIndex : startIndex + 1
-    if (timeIndex > startIndex && timeIndex < endSlotIndex) return true
+    const endSlotIndex = bEnd ? getEndSlotIndex(bEnd.time) : (startIndex + 1)
+    const safeEndSlotIndex = endSlotIndex > startIndex ? endSlotIndex : (startIndex + 1)
+    if (timeIndex > startIndex && timeIndex < safeEndSlotIndex) return true
   }
   return false
 }

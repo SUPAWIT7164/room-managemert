@@ -109,6 +109,7 @@ const registerFace = async () => {
     if (uploadResponse.data.success) {
       success.value = 'ลงทะเบียนใบหน้าสำเร็จ'
       hasFace.value = true
+      authStore.setFaceRegistrationStatus(true)
       
       // Redirect after 2 seconds
       setTimeout(() => {

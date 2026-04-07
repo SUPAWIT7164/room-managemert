@@ -7,6 +7,7 @@ import moment from 'moment'
 import 'moment/locale/th'
 import $ from 'jquery'
 import 'daterangepicker'
+import api from '@/utils/api'
 
 // Make moment available globally for daterangepicker
 if (typeof window !== 'undefined') {
@@ -30,23 +31,58 @@ const selectedUnit = ref('all') // 'all', 'kW', 'A', 'V', 'kWh'
 const loading = ref(false)
 const statusMessage = ref(null)
 const statusType = ref('info')
-const devices = ref([
-  { id: 1, name: 'Power Meter - อาคาร 1' },
-  { id: 2, name: 'Power Meter - อาคาร 2' },
-  { id: 3, name: 'Power Meter - อาคาร 3' },
-])
+const devices = ref([])
+/** hour | day | week — จาก API สำหรับรูปแบบแกนเวลา */
+const chartBucket = ref('day')
 
 // Date range picker
 const dateRangeInput = ref(null)
 const startDate = ref(null)
 const endDate = ref(null)
 
-// Initialize dates: 1st of current month to today
-const initDateRange = () => {
-  const firstDay = moment().startOf('month')
-  const lastDay = moment()
-  startDate.value = firstDay.format('YYYY-MM-DD')
-  endDate.value = lastDay.format('YYYY-MM-DD')
+// ช่วงวันที่ตามความละเอียดเวลา (สอดคล้องกับตัวเลือก 24h / 7d / 1m)
+const syncDatesFromGranularity = () => {
+  const end = moment()
+  let start
+  switch (timeGranularity.value) {
+    case '24h':
+      start = moment().subtract(24, 'hours')
+      break
+    case '7d':
+      start = moment().subtract(7, 'days')
+      break
+    case '1m':
+      start = moment().subtract(1, 'month')
+      break
+    default:
+      start = moment().startOf('month')
+  }
+  startDate.value = start.format('YYYY-MM-DD')
+  endDate.value = end.format('YYYY-MM-DD')
+}
+
+const refreshDatePickerUi = () => {
+  nextTick(() => {
+    const el = dateRangeInput.value || document.getElementById('dateRangeEnergy')
+    if (!el) return
+    const jQuery = (typeof window !== 'undefined' && window.$) || $
+    const $input = jQuery(el)
+    const picker = $input.data('daterangepicker')
+    if (picker && startDate.value && endDate.value) {
+      picker.setStartDate(moment(startDate.value, 'YYYY-MM-DD'))
+      picker.setEndDate(moment(endDate.value, 'YYYY-MM-DD'))
+    }
+  })
+}
+
+const fetchDevices = async () => {
+  try {
+    const response = await api.get('/energy/devices')
+    if (response?.data?.success)
+      devices.value = response.data.data || []
+  } catch {
+    devices.value = []
+  }
 }
 
 // Format date for display
@@ -60,12 +96,14 @@ const formatDate = (dateString) => {
   })
 }
 
-const chartData = ref({
-  power: [],
-  current: [],
-  voltage: [],
+const emptyChartShape = () => ({
+  power: { phase1: [], phase2: [], phase3: [] },
+  current: { phase1: [], phase2: [], phase3: [] },
+  voltage: { phase1: [], phase2: [], phase3: [] },
   energy: [],
 })
+
+const chartData = ref(emptyChartShape())
 
 // Initialize date range picker
 const initializeDateRangePicker = () => {
@@ -132,8 +170,8 @@ const initializeDateRangePicker = () => {
             'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม',
           ],
         },
-        startDate: moment().startOf('month'), // Set to 1st of current month
-        endDate: moment(), // Set to today
+        startDate: moment(startDate.value || undefined, 'YYYY-MM-DD'),
+        endDate: moment(endDate.value || undefined, 'YYYY-MM-DD'),
       }, (start, end) => {
         console.log('Date range selected:', start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'))
         startDate.value = start.format('YYYY-MM-DD')
@@ -178,12 +216,13 @@ const handleDateRangeClick = (event) => {
   }
 }
 
-// Initialize date range
-onMounted(() => {
+onMounted(async () => {
   moment.locale('th')
-  initDateRange()
+  syncDatesFromGranularity()
   initializeDateRangePicker()
-  loadEnergyData()
+  await fetchDevices()
+  await loadEnergyData()
+  refreshDatePickerUi()
 })
 
 onBeforeUnmount(() => {
@@ -197,182 +236,71 @@ onBeforeUnmount(() => {
   }
 })
 
-// Watch timeGranularity to reload data
-const handleGranularityChange = (value) => {
+const handleGranularityChange = () => {
+  syncDatesFromGranularity()
+  refreshDatePickerUi()
   loadEnergyData()
-}
-
-// Generate mock data with aggregation based on granularity
-const generateMockData = (granularity, customStartDate = null, customEndDate = null) => {
-  const data = []
-  
-  let startDate = null
-  let endDate = null
-  let dataPoints = 0
-  let timeInterval = 0
-  let timeLabel = ''
-  
-  if (granularity === 'custom' && customStartDate && customEndDate) {
-    // Custom date range
-    startDate = new Date(customStartDate)
-    endDate = new Date(customEndDate)
-    
-    // Calculate difference in days
-    const diffTime = Math.abs(endDate - startDate)
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-    
-    // Determine interval based on range
-    if (diffDays <= 1) {
-      // Less than 1 day: hourly data
-      timeInterval = 60 * 60 * 1000 // 1 hour
-      dataPoints = Math.min(24, diffDays * 24)
-    } else if (diffDays <= 7) {
-      // 1-7 days: daily data
-      timeInterval = 24 * 60 * 60 * 1000 // 1 day
-      dataPoints = diffDays
-    } else if (diffDays <= 30) {
-      // 1-30 days: daily data
-      timeInterval = 24 * 60 * 60 * 1000 // 1 day
-      dataPoints = Math.min(30, diffDays)
-    } else {
-      // More than 30 days: daily or weekly data
-      timeInterval = diffDays > 90 ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000
-      dataPoints = diffDays > 90 ? Math.floor(diffDays / 7) : diffDays
-    }
-    timeLabel = 'custom'
-  } else {
-    // Preset ranges
-    endDate = new Date()
-    
-    switch (granularity) {
-      case '24h':
-        // 24 ชั่วโมงล่าสุด
-        dataPoints = 24
-        timeInterval = 60 * 60 * 1000 // 1 ชั่วโมง
-        timeLabel = 'hour'
-        break
-      case '7d':
-        // 7 วันล่าสุด
-        dataPoints = 7
-        timeInterval = 24 * 60 * 60 * 1000 // 1 วัน
-        timeLabel = 'day'
-        break
-      case '1m':
-        // 1 เดือนล่าสุด
-        dataPoints = 30
-        timeInterval = 24 * 60 * 60 * 1000 // 1 วัน
-        timeLabel = 'day'
-        break
-      default:
-        dataPoints = 24
-        timeInterval = 60 * 60 * 1000
-    }
-  }
-  
-  // สร้างข้อมูลตามจำนวนจุดที่กำหนด
-  const baseMultiplier = granularity === '24h' || timeLabel === 'hour' ? 1 : (granularity === '7d' || (timeLabel === 'day' && dataPoints <= 7) ? 1.2 : 1.5)
-  
-  for (let i = 0; i <= dataPoints; i++) {
-    const time = granularity === 'custom' && startDate 
-      ? new Date(startDate.getTime() + i * timeInterval)
-      : new Date(endDate.getTime() - (dataPoints - i) * timeInterval)
-    
-    // Make sure we don't exceed endDate for custom range
-    if (granularity === 'custom' && time > endDate) {
-      break
-    }
-    
-    data.push({
-      time: time.toISOString(),
-      AVG_ELECP1: (Math.random() * 5 + 10 * baseMultiplier).toFixed(2),
-      AVG_ELECP2: (Math.random() * 5 + 10 * baseMultiplier).toFixed(2),
-      AVG_ELECP3: (Math.random() * 5 + 10 * baseMultiplier).toFixed(2),
-      AVG_ELECI1: (Math.random() * 10 + 20 * baseMultiplier).toFixed(2),
-      AVG_ELECI2: (Math.random() * 10 + 20 * baseMultiplier).toFixed(2),
-      AVG_ELECI3: (Math.random() * 10 + 20 * baseMultiplier).toFixed(2),
-      AVG_ELECV1: (Math.random() * 5 + 220).toFixed(2),
-      AVG_ELECV2: (Math.random() * 5 + 220).toFixed(2),
-      AVG_ELECV3: (Math.random() * 5 + 220).toFixed(2),
-      DIFF_ELECU: (Math.random() * 3 + 2 * baseMultiplier).toFixed(2),
-    })
-  }
-  
-  return data
 }
 
 const loadEnergyData = async () => {
   loading.value = true
   statusMessage.value = 'กำลังโหลดข้อมูล...'
   statusType.value = 'info'
-  
+
   try {
-    // Use date range from picker
-    const customStart = startDate.value
-    const customEnd = endDate.value
-    
-    if (!customStart || !customEnd) {
+    if (!startDate.value || !endDate.value) {
       statusMessage.value = 'กรุณาเลือกช่วงวันที่'
       statusType.value = 'warning'
       loading.value = false
       return
     }
-    
-    // ลดเวลา delay ตามจำนวนข้อมูล (ข้อมูลน้อย = เร็วขึ้น)
-    const delayTime = timeGranularity.value === '24h' ? 300 : 
-                      timeGranularity.value === '7d' ? 200 : 
-                      timeGranularity.value === '1m' ? 150 : 100
-    
-    // Simulate API call (ลดเวลา delay)
-    await new Promise(resolve => setTimeout(resolve, delayTime))
-    
-    // Generate mock data based on granularity
-    // For preset ranges, use timeGranularity, for custom use the date range
-    let granularity = timeGranularity.value
-    if (customStart && customEnd) {
-      granularity = 'custom'
+
+    const params = {
+      period: timeGranularity.value,
+      start: startDate.value,
+      end: endDate.value,
     }
-    const mockData = generateMockData(granularity, customStart, customEnd)
-    
-    // Prepare chart data (ใช้ requestAnimationFrame เพื่อไม่ block UI)
-    await new Promise(resolve => {
-      requestAnimationFrame(() => {
-        chartData.value = {
-          power: {
-            phase1: mockData.map(d => ({ x: new Date(d.time).getTime(), y: parseFloat(d.AVG_ELECP1) })),
-            phase2: mockData.map(d => ({ x: new Date(d.time).getTime(), y: parseFloat(d.AVG_ELECP2) })),
-            phase3: mockData.map(d => ({ x: new Date(d.time).getTime(), y: parseFloat(d.AVG_ELECP3) })),
-          },
-          current: {
-            phase1: mockData.map(d => ({ x: new Date(d.time).getTime(), y: parseFloat(d.AVG_ELECI1) })),
-            phase2: mockData.map(d => ({ x: new Date(d.time).getTime(), y: parseFloat(d.AVG_ELECI2) })),
-            phase3: mockData.map(d => ({ x: new Date(d.time).getTime(), y: parseFloat(d.AVG_ELECI3) })),
-          },
-          voltage: {
-            phase1: mockData.map(d => ({ x: new Date(d.time).getTime(), y: parseFloat(d.AVG_ELECV1) })),
-            phase2: mockData.map(d => ({ x: new Date(d.time).getTime(), y: parseFloat(d.AVG_ELECV2) })),
-            phase3: mockData.map(d => ({ x: new Date(d.time).getTime(), y: parseFloat(d.AVG_ELECV3) })),
-          },
-          energy: mockData.map(d => ({ x: new Date(d.time).getTime(), y: parseFloat(d.DIFF_ELECU) })),
-        }
-        resolve()
-      })
-    })
-    
-    const granularityLabels = {
-      '24h': '24 ชั่วโมง',
-      '7d': '7 วัน',
-      '1m': '1 เดือน',
-      'custom': 'เลือกเอง',
+    if (selectedMeter.value !== 'all')
+      params.device_id = selectedMeter.value
+
+    const response = await api.get('/energy/report', { params })
+    if (!response?.data?.success)
+      throw new Error(response?.data?.message || 'Request failed')
+
+    const payload = response.data.data
+    const records = payload?.records || []
+    chartBucket.value = payload?.bucket || 'day'
+
+    /** ในฐานข้อมูล power เป็นวัตต์ — แปลงเป็น kW ให้สอดคล้องป้ายกราฟ */
+    const toKw = w => parseFloat(w || 0) / 1000
+    const num = v => parseFloat(v || 0)
+
+    chartData.value = {
+      power: {
+        phase1: records.map(d => ({ x: new Date(d.bucket_start).getTime(), y: toKw(d.avg_power) })),
+        phase2: records.map(d => ({ x: new Date(d.bucket_start).getTime(), y: toKw(d.avg_power2) })),
+        phase3: records.map(d => ({ x: new Date(d.bucket_start).getTime(), y: toKw(d.avg_power3) })),
+      },
+      current: {
+        phase1: records.map(d => ({ x: new Date(d.bucket_start).getTime(), y: num(d.avg_current) })),
+        phase2: records.map(d => ({ x: new Date(d.bucket_start).getTime(), y: num(d.avg_current2) })),
+        phase3: records.map(d => ({ x: new Date(d.bucket_start).getTime(), y: num(d.avg_current3) })),
+      },
+      voltage: {
+        phase1: records.map(d => ({ x: new Date(d.bucket_start).getTime(), y: num(d.avg_voltage) })),
+        phase2: records.map(d => ({ x: new Date(d.bucket_start).getTime(), y: num(d.avg_voltage2) })),
+        phase3: records.map(d => ({ x: new Date(d.bucket_start).getTime(), y: num(d.avg_voltage3) })),
+      },
+      energy: records.map(d => ({ x: new Date(d.bucket_start).getTime(), y: num(d.energy_delta) })),
     }
-    
-    let dateRangeLabel = ''
-    if (startDate.value && endDate.value) {
-      dateRangeLabel = ` (${formatDate(startDate.value)} - ${formatDate(endDate.value)})`
-    }
-    
-    statusMessage.value = `โหลดข้อมูลสำเร็จ: ${mockData.length} จุดข้อมูล (${granularityLabels[timeGranularity.value]}${dateRangeLabel})`
-    statusType.value = 'success'
-    
+
+    const granularityLabels = { '24h': '24 ชั่วโมง', '7d': '7 วัน', '1m': '1 เดือน' }
+    const rangeLabel = `${formatDate(startDate.value)} - ${formatDate(endDate.value)}`
+    statusMessage.value = records.length
+      ? `โหลดข้อมูลสำเร็จ: ${records.length} จุด (${granularityLabels[timeGranularity.value] || ''} · ${rangeLabel})`
+      : `ไม่พบข้อมูลในช่วง ${rangeLabel}`
+    statusType.value = records.length ? 'success' : 'warning'
+
     setTimeout(() => {
       statusMessage.value = null
     }, 3000)
@@ -380,61 +308,35 @@ const loadEnergyData = async () => {
     console.error('Error loading energy data:', error)
     statusMessage.value = 'เกิดข้อผิดพลาดในการโหลดข้อมูล'
     statusType.value = 'error'
+    chartData.value = emptyChartShape()
   } finally {
     loading.value = false
   }
 }
 
-// Helper function to get date format based on granularity
-const getDateFormat = (granularity) => {
-  switch (granularity) {
-    case '24h':
+/** รูปแบบแกนเวลาตาม bucket ที่ API รวมข้อมูล (hour / day / week) */
+const getDateFormat = () => {
+  switch (chartBucket.value) {
+    case 'hour':
       return 'dd MMM yyyy HH:mm'
-    case '7d':
-      return 'dd MMM yyyy'
-    case '1m':
-      return 'dd MMM yyyy'
-    case 'custom':
-      // Check the date range to determine format
-      if (startDate.value && endDate.value) {
-        const diffTime = Math.abs(new Date(endDate.value) - new Date(startDate.value))
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-        if (diffDays <= 1) {
-          return 'dd MMM yyyy HH:mm'
-        }
-      }
+    case 'day':
+    case 'week':
       return 'dd MMM yyyy'
     default:
-      return 'dd MMM yyyy HH:mm'
+      return 'dd MMM yyyy'
   }
 }
 
-const getXAxisFormat = (granularity) => {
-  switch (granularity) {
-    case '24h':
+const getXAxisFormat = () => {
+  switch (chartBucket.value) {
+    case 'hour':
       return 'HH:mm'
-    case '7d':
+    case 'day':
       return 'dd MMM'
-    case '1m':
-      return 'dd MMM'
-    case 'custom':
-      // Check the date range to determine format
-      if (startDate.value && endDate.value) {
-        const diffTime = Math.abs(new Date(endDate.value) - new Date(startDate.value))
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-        if (diffDays <= 1) {
-          return 'HH:mm'
-        } else if (diffDays <= 7) {
-          return 'dd MMM'
-        } else if (diffDays <= 30) {
-          return 'dd MMM'
-        } else {
-          return 'dd MMM yyyy'
-        }
-      }
-      return 'dd MMM'
+    case 'week':
+      return 'dd MMM yyyy'
     default:
-      return 'HH:mm'
+      return 'dd MMM'
   }
 }
 
@@ -467,7 +369,7 @@ const powerChartConfig = computed(() => {
       ...baseConfig.tooltip,
       x: {
         ...baseConfig.tooltip.x,
-        format: getDateFormat(timeGranularity.value),
+        format: getDateFormat(),
       },
       y: {
         ...baseConfig.tooltip.y,
@@ -480,7 +382,7 @@ const powerChartConfig = computed(() => {
       labels: {
         ...baseConfig.xaxis.labels,
         datetimeUTC: false,
-        format: getXAxisFormat(timeGranularity.value),
+        format: getXAxisFormat(),
       },
     },
     yaxis: {
@@ -529,7 +431,7 @@ const currentChartConfig = computed(() => {
       ...baseConfig.tooltip,
       x: {
         ...baseConfig.tooltip.x,
-        format: getDateFormat(timeGranularity.value),
+        format: getDateFormat(),
       },
       y: {
         ...baseConfig.tooltip.y,
@@ -542,7 +444,7 @@ const currentChartConfig = computed(() => {
       labels: {
         ...baseConfig.xaxis.labels,
         datetimeUTC: false,
-        format: getXAxisFormat(timeGranularity.value),
+        format: getXAxisFormat(),
       },
     },
     yaxis: {
@@ -591,7 +493,7 @@ const voltageChartConfig = computed(() => {
       ...baseConfig.tooltip,
       x: {
         ...baseConfig.tooltip.x,
-        format: getDateFormat(timeGranularity.value),
+        format: getDateFormat(),
       },
       y: {
         ...baseConfig.tooltip.y,
@@ -604,7 +506,7 @@ const voltageChartConfig = computed(() => {
       labels: {
         ...baseConfig.xaxis.labels,
         datetimeUTC: false,
-        format: getXAxisFormat(timeGranularity.value),
+        format: getXAxisFormat(),
       },
     },
     yaxis: {
@@ -649,7 +551,7 @@ const energyChartConfig = computed(() => {
       labels: {
         ...baseConfig.xaxis.labels,
         datetimeUTC: false,
-        format: getXAxisFormat(timeGranularity.value),
+        format: getXAxisFormat(),
       },
     },
     yaxis: {
@@ -671,7 +573,7 @@ const energyChartConfig = computed(() => {
       ...baseConfig.tooltip,
       x: {
         ...baseConfig.tooltip.x,
-        format: getDateFormat(timeGranularity.value),
+        format: getDateFormat(),
       },
       y: {
         ...baseConfig.tooltip.y,
@@ -985,15 +887,6 @@ const energyChartConfig = computed(() => {
               <div>กรุณาเลือกช่วงเวลาอื่นหรือตรวจสอบการเชื่อมต่ออุปกรณ์</div>
             </VAlert>
 
-            <!-- Info Alert -->
-            <VAlert
-              type="info"
-              variant="tonal"
-              class="mt-4"
-            >
-              <VAlertTitle>ข้อมูลจำลอง</VAlertTitle>
-              <div>ข้อมูลที่แสดงเป็นข้อมูลจำลองสำหรับการทดสอบระบบ ข้อมูลจริงจะมาจากอุปกรณ์วัดพลังงานที่เชื่อมต่อกับระบบ</div>
-            </VAlert>
           </VCardText>
         </VCard>
       </VCol>

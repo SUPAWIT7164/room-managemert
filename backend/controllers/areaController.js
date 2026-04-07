@@ -177,27 +177,7 @@ exports.controlDeviceById = async (req, res) => {
             }
         }
 
-        const settingsJson = newSettings ? JSON.stringify(newSettings) : null;
-        const statusValue = newStatus ? 1 : 0;
-
-        const areaDeviceIndexRaw = await DeviceState.getAreaDeviceIndexForDeviceId(areaId, deviceType, deviceId);
-        const areaDeviceIndex = areaDeviceIndexRaw != null ? areaDeviceIndexRaw : Number(deviceId);
-        const [existing] = await pool.query(`SELECT id FROM device_states WHERE device_id = ?`, [deviceId]);
-        if (existing && existing.length > 0) {
-            await pool.query(
-                `UPDATE device_states
-                 SET status = ?, settings = ?, updated_at = GETDATE(),
-                     area_id = ?, room_id = NULL, device_type = ?, device_index = ?
-                 WHERE device_id = ?`,
-                [statusValue, settingsJson, areaId, deviceType, areaDeviceIndex, deviceId]
-            );
-        } else {
-            await pool.query(
-                `INSERT INTO device_states (device_id, area_id, room_id, device_type, device_index, status, settings, created_at, updated_at)
-                 VALUES (?, ?, NULL, ?, ?, ?, ?, GETDATE(), GETDATE())`,
-                [deviceId, areaId, deviceType, areaDeviceIndex, statusValue, settingsJson]
-            );
-        }
+        await DeviceState.upsertAreaStateByDeviceId(areaId, deviceId, deviceType, newStatus, newSettings);
 
         res.json({
             success: true,

@@ -29,6 +29,92 @@ class HomeAssistantSyncService {
     }
 
     /**
+     * จาก entity ควบคุม ERV (เช่น switch.erv_u1_power) หา "stem" สำหรับ sensor/script คู่กัน
+     * @param {string} powerEntityId
+     * @returns {string|null} เช่น erv_u1
+     */
+    ervStemFromPowerEntityId(powerEntityId) {
+        const trimmed = String(powerEntityId || '').trim();
+        const dot = trimmed.indexOf('.');
+        if (dot === -1) return null;
+        let obj = trimmed.slice(dot + 1);
+        if (!obj) return null;
+        const lower = obj.toLowerCase();
+        if (lower.endsWith('_power')) {
+            obj = obj.slice(0, obj.length - 6);
+        }
+        return obj || null;
+    }
+
+    /**
+     * ดึงโหมดและระดับลม ERV จาก HA (sensor + script) ให้ตรงกับ logic เดิมใน syncErv
+     * @param {string} powerEntityId - entity เปิด/ปิด เช่น switch.erv_u1_power
+     * @returns {Promise<{ mode: string, speed: string }>}
+     */
+    async fetchErvModeAndSpeedFromHomeAssistant(powerEntityId) {
+        let mode = 'normal';
+        let speed = 'low';
+
+        const stem = this.ervStemFromPowerEntityId(powerEntityId);
+        if (!stem) {
+            return { mode, speed };
+        }
+
+        const sensorEntityIds = [
+            `sensor.${stem}_mode`,
+            `sensor.${stem}_air`
+        ];
+        const scriptEntityIds = [
+            `script.${stem}_mode_heat`,
+            `script.${stem}_mode_normal`
+        ];
+
+        try {
+            const sensorStatesResult = await homeAssistantService.getMultipleStates(sensorEntityIds);
+            const sensorStates = sensorStatesResult.data;
+
+            const scriptStatesResult = await homeAssistantService.getMultipleStates(scriptEntityIds);
+            const scriptStates = scriptStatesResult.data;
+
+            const modeSensor = sensorStates[`sensor.${stem}_mode`];
+            if (modeSensor?.success && modeSensor?.state?.state !== undefined) {
+                const modeValue = parseInt(modeSensor.state.state, 10) || 0;
+                mode = modeValue === 0 ? 'normal' : 'heat';
+            }
+
+            const heatScript = scriptStates[`script.${stem}_mode_heat`];
+            const normalScript = scriptStates[`script.${stem}_mode_normal`];
+
+            if (heatScript?.success && normalScript?.success) {
+                const heatLastTriggered = heatScript.state?.attributes?.last_triggered;
+                const normalLastTriggered = normalScript.state?.attributes?.last_triggered;
+
+                if (heatLastTriggered && normalLastTriggered) {
+                    const heatTime = new Date(heatLastTriggered).getTime();
+                    const normalTime = new Date(normalLastTriggered).getTime();
+                    mode = heatTime > normalTime ? 'heat' : 'normal';
+                } else if (heatLastTriggered && !normalLastTriggered) {
+                    mode = 'heat';
+                } else if (normalLastTriggered && !heatLastTriggered) {
+                    mode = 'normal';
+                }
+            }
+
+            const airSensor = sensorStates[`sensor.${stem}_air`];
+            if (airSensor?.success && airSensor?.state?.state !== undefined) {
+                const airValue = parseInt(airSensor.state.state, 10) || 1;
+                speed = airValue >= 2 ? 'high' : 'low';
+            }
+
+            console.log(`[HomeAssistantSync] ERV mode/speed from HA (${powerEntityId}, stem=${stem}): mode=${mode}, speed=${speed}`);
+        } catch (error) {
+            console.warn(`[HomeAssistantSync] fetchErvModeAndSpeedFromHomeAssistant failed for ${powerEntityId}:`, error.message);
+        }
+
+        return { mode, speed };
+    }
+
+    /**
      * คืน devices.id สำหรับแถวใน room ที่ entity_id ตรงกับ mapping
      */
     async resolveDevicesRowId(mapping) {
@@ -168,88 +254,17 @@ class HomeAssistantSyncService {
             const stateResult = await homeAssistantService.getState(mapping.entityId);
             const haState = stateResult.state;
 
-            // แปลงสถานะจาก Home Assistant
-            const isOn = haState.state === 'on';
+            const stateStr = (haState.state || '').toString().toLowerCase();
+            const isOn = stateStr === 'on';
 
-            // ดึงสถานะโหมดและระดับจาก sensor entities และ script states
-            const sensorEntityIds = [
-                'sensor.erv_u1_mode',
-                'sensor.erv_u1_air'
-            ];
-            const scriptEntityIds = [
-                'script.erv_u1_mode_heat',
-                'script.erv_u1_mode_normal'
-            ];
+            const { mode, speed } = await this.fetchErvModeAndSpeedFromHomeAssistant(mapping.entityId);
+            const settings = { mode, speed };
 
-            const sensorStatesResult = await homeAssistantService.getMultipleStates(sensorEntityIds);
-            const sensorStates = sensorStatesResult.data;
-            
-            const scriptStatesResult = await homeAssistantService.getMultipleStates(scriptEntityIds);
-            const scriptStates = scriptStatesResult.data;
-
-            // ตรวจสอบโหมดจาก sensor.erv_u1_mode และ script last_triggered
-            // ใช้ last_triggered ของ script เพื่อระบุโหมดปัจจุบัน (เพราะ script state จะเป็น 'off' เสมอ)
-            let mode = 'normal'; // Default
-            
-            // ตรวจสอบจาก sensor.erv_u1_mode ก่อน
-            const modeSensor = sensorStates['sensor.erv_u1_mode'];
-            if (modeSensor?.success && modeSensor?.state?.state !== undefined) {
-                const modeValue = parseInt(modeSensor.state.state) || 0;
-                // ถ้า modeValue เป็น 1 หรือค่าที่ไม่ใช่ 0 ให้เป็น heat mode
-                mode = modeValue === 0 ? 'normal' : 'heat';
-            }
-            
-            // ตรวจสอบจาก script last_triggered เพื่อยืนยัน (ถ้า script ถูกเรียกล่าสุด)
-            const heatScript = scriptStates['script.erv_u1_mode_heat'];
-            const normalScript = scriptStates['script.erv_u1_mode_normal'];
-            
-            if (heatScript?.success && normalScript?.success) {
-                const heatLastTriggered = heatScript.state?.attributes?.last_triggered;
-                const normalLastTriggered = normalScript.state?.attributes?.last_triggered;
-                
-                // ถ้ามี last_triggered ให้เปรียบเทียบว่า script ไหนถูกเรียกล่าสุด
-                if (heatLastTriggered && normalLastTriggered) {
-                    const heatTime = new Date(heatLastTriggered).getTime();
-                    const normalTime = new Date(normalLastTriggered).getTime();
-                    // ใช้ script ที่ถูกเรียกล่าสุด
-                    mode = heatTime > normalTime ? 'heat' : 'normal';
-                } else if (heatLastTriggered && !normalLastTriggered) {
-                    mode = 'heat';
-                } else if (normalLastTriggered && !heatLastTriggered) {
-                    mode = 'normal';
-                }
-            }
-
-            // ตรวจสอบระดับจาก sensor.erv_u1_air
-            // 1 = low, 2 = medium, 3 = high (หรือค่าอื่นตามที่ตั้งค่า)
-            // แต่ API รองรับแค่ 'low' และ 'high' เท่านั้น
-            let speed = 'low'; // Default
-            const airSensor = sensorStates['sensor.erv_u1_air'];
-            if (airSensor?.success && airSensor?.state?.state !== undefined) {
-                const airValue = parseInt(airSensor.state.state) || 1;
-                // แปลงค่า: 1 = low, 2 หรือ 3 = high (API รองรับแค่ low/high)
-                speed = airValue >= 2 ? 'high' : 'low';
-            }
-
-            const settings = {
-                mode: mode,
-                speed: speed
-            };
-
-            // Log สำหรับ debug
             console.log(`[HomeAssistantSync] ERV ${deviceId} (${mapping.entityId}) state:`, {
                 power: haState.state,
-                isOn: isOn,
-                mode: mode,
-                speed: speed,
-                sensorStates: {
-                    mode: modeSensor?.state?.state,
-                    air: airSensor?.state?.state
-                },
-                scriptLastTriggered: {
-                    heat: heatScript?.state?.attributes?.last_triggered,
-                    normal: normalScript?.state?.attributes?.last_triggered
-                }
+                isOn,
+                mode,
+                speed
             });
 
             const dbDeviceId = await this.resolveDevicesRowId(mapping);

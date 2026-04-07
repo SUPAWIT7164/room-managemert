@@ -3,6 +3,7 @@ const DeviceState = require('../models/DeviceState');
 const homeAssistantService = require('../services/homeAssistantService');
 const homeAssistantSyncService = require('../services/homeAssistantSyncService');
 const { getControllableDeviceTypes } = require('../config/deviceTypes');
+const { getAm319EntityIds, formatAm319HaDataForApi } = require('../config/am319HaEntities');
 
 /** ประเภทที่ sync จาก Home Assistant ลง device_states */
 const HA_DEVICE_TYPES = ['light', 'ac', 'erv', 'vent_fan'];
@@ -876,34 +877,12 @@ class DeviceController {
                 });
             }
 
-            // Entity IDs สำหรับ AM319 sensors
-            const entityIds = [
-                'sensor.am319_am319_co2',
-                'sensor.am319_am319_hcho',
-                'sensor.am319_am319_humidity',
-                'binary_sensor.am319_am319_motion',
-                'sensor.am319_am319_pm2_5',
-                'sensor.am319_am319_pm10',
-                'sensor.am319_am319_pressure',
-                'sensor.am319_am319_temperature',
-                'sensor.am319_am319_tvoc'
-            ];
+            const entityIds = getAm319EntityIds();
 
             // ดึงข้อมูลจาก Home Assistant
             const result = await homeAssistantService.getMultipleStates(entityIds);
 
-            // Format ข้อมูลให้ง่ายต่อการใช้งาน
-            const formattedData = {
-                co2: result.data['sensor.am319_am319_co2']?.state?.state || null,
-                hcho: result.data['sensor.am319_am319_hcho']?.state?.state || null,
-                humidity: result.data['sensor.am319_am319_humidity']?.state?.state || null,
-                motion: result.data['binary_sensor.am319_am319_motion']?.state?.state || null,
-                pm2_5: result.data['sensor.am319_am319_pm2_5']?.state?.state || null,
-                pm10: result.data['sensor.am319_am319_pm10']?.state?.state || null,
-                pressure: result.data['sensor.am319_am319_pressure']?.state?.state || null,
-                temperature: result.data['sensor.am319_am319_temperature']?.state?.state || null,
-                tvoc: result.data['sensor.am319_am319_tvoc']?.state?.state || null
-            };
+            const formattedData = formatAm319HaDataForApi(result.data);
 
             // ดึง attributes สำหรับข้อมูลเพิ่มเติม
             const rawData = {};

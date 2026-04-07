@@ -11,7 +11,6 @@ import { DEFAULT_DEVICE_TYPES, getDeviceTypeIcon, getDeviceTypeLabel } from '@/c
 import roomBackgroundImageUrl from '@/assets/images/สื่อ (14).jpg'
 import fanImageUrl from '@/assets/images/fan.png'
 import buildingImageUrl from '@/assets/images/A1006.jpg'
-import floorPlanImageUrl from '@/assets/images/สื่อ (15) (1).jpg'
 
 const roomBackgroundImage = roomBackgroundImageUrl
 const fanImage = fanImageUrl
@@ -95,7 +94,7 @@ const showBuildingList = computed(() => !selectedAreaId.value)
 const showFloorPlan = computed(() => selectedAreaId.value && !selectedRoomFromQuery.value)
 const showRoomControl = computed(() => selectedAreaId.value && selectedRoomFromQuery.value)
 
-// รูป floor plan: ใช้ area ที่เลือก (area.image) หรือ area แรกของ building+floor
+// รูป floor plan: ใช้เฉพาะรูปจาก DB (areas.image)
 const currentFloorArea = computed(() => {
   if (selectedArea.value) return selectedArea.value
   const buildingId = Number(selectedBuilding.value)
@@ -118,8 +117,8 @@ const selectedAreaDisplayName = computed(() =>
 )
 const floorPlanImageDisplay = computed(() => {
   const area = currentFloorArea.value
-  if (area?.image) return imageSrcFromDb(area.image, floorPlanImageUrl)
-  return floorPlanImageUrl
+  if (area?.image) return imageSrcFromDb(area.image, '')
+  return ''
 })
 
 // รูปห้อง (สำหรับหน้าควบคุมห้อง): ดึงจาก room.image ของห้องที่เลือก
@@ -2223,7 +2222,7 @@ const updateCO2Chart = (co2Value) => {
   }, 0)
 }
 
-// Start auto-refresh for sensor data
+// Auto-refresh sensor overlay / environmental data ทุก 10 วินาที
 const startSensorDataAutoRefresh = () => {
   if (sensorDataRefreshInterval.value) {
     clearInterval(sensorDataRefreshInterval.value)
@@ -2239,7 +2238,7 @@ const startSensorDataAutoRefresh = () => {
   }
 
   refresh()
-  sensorDataRefreshInterval.value = setInterval(refresh, 30000)
+  sensorDataRefreshInterval.value = setInterval(refresh, 10000)
 }
 
 // Stop auto-refresh for sensor data
@@ -3996,10 +3995,10 @@ onBeforeUnmount(() => {
                     />
                     <div>
                       <h4 class="text-h4 mb-0">
-                        Floor Plan • {{ selectedAreaDisplayName }}
+                  {{ selectedAreaDisplayName }}
                       </h4>
                       <div class="text-caption text-disabled">
-                        <span v-if="!floorPlanEditMode">คลิกที่ Area เพื่อควบคุมห้อง</span>
+                        <span v-if="!floorPlanEditMode"></span>
                         <span v-else>โหมดแก้ไข: ปรับขนาด, ลาก, เพิ่ม/ลบ Area</span>
                       </div>
                     </div>
@@ -4057,10 +4056,18 @@ onBeforeUnmount(() => {
             <VCardText class="pa-6">
               <div class="floor-plan-container">
                 <img
+                  v-if="floorPlanImageDisplay"
                   :src="floorPlanImageDisplay"
                   alt="Floor Plan"
                   class="floor-plan-image"
                 />
+
+                <div
+                  v-else
+                  style="width: 100%; min-height: 240px; display: flex; align-items: center; justify-content: center; color: rgba(0,0,0,0.55); background: rgba(245,245,245,0.6);"
+                >
+                  ไม่พบรูป Floor Plan ในฐานข้อมูล
+                </div>
                 
                 <!-- Areas Overlay — แสดง area-box ที่มี x1,y1,x2,y2 จาก DB หรือ virtual area (อุปกรณ์ area_id) -->
                 <div class="areas-overlay">
@@ -5844,7 +5851,7 @@ onBeforeUnmount(() => {
             <div class="text-body-2">
               <strong>หมายเหตุ:</strong>
               การเปิดระบบจะเปิดเฉพาะอุปกรณ์ที่ปิดอยู่ 
-              การปิดระบบจะปิดอุปกรณ์ทั้งหมด (ไฟ, แอร์, ERV)
+              การปิดระบบจะปิดอุปกรณ์ทั้งหมด (ไฟ, แอร์, ERV, พัดลมระบายอากาศ) 
             </div>
           </VAlert>
         </VCardText>

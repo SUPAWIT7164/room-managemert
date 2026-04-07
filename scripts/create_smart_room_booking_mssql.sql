@@ -482,17 +482,37 @@ CREATE TABLE [dbo].[energy_data] (
     [energy] decimal(10,2) NULL,
     [voltage] decimal(10,2) NULL,
     [current] decimal(10,2) NULL,
-    [energy2] decimal(10,2) NULL,
+    [power2] decimal(10,2) NULL,
     [voltage2] decimal(10,2) NULL,
     [current2] decimal(10,2) NULL,
-    [energy3] decimal(10,2) NULL,
+    [power_factor2] decimal(5,2) NULL,
+    [power3] decimal(10,2) NULL,
     [voltage3] decimal(10,2) NULL,
     [current3] decimal(10,2) NULL,
+    [power_factor3] decimal(5,2) NULL,
     [power_factor] decimal(5,2) NULL,
     [recorded_at] datetime2 NOT NULL DEFAULT SYSDATETIME(),
     [created_at] datetime2 NULL,
     [updated_at] datetime2 NULL,
     CONSTRAINT [PK_energy_data] PRIMARY KEY ([id])
+);
+
+-- watermeter_data
+IF OBJECT_ID(N'dbo.watermeter_data', N'U') IS NULL
+CREATE TABLE [dbo].[watermeter_data] (
+    [id] bigint IDENTITY(1,1) NOT NULL,
+    [device_id] bigint NULL,
+    [device_type_id] bigint NULL,
+    [flowrate] decimal(10,2) NULL,
+    [totalizer] decimal(18,2) NULL,
+    [waterpump] bit NULL,
+    [building_id] bigint NULL,
+    [room_id] bigint NULL,
+    [area_id] bigint NULL,
+    [recorded_at] datetime2 NOT NULL DEFAULT SYSDATETIME(),
+    [created_at] datetime2 NULL,
+    [updated_at] datetime2 NULL,
+    CONSTRAINT [PK_watermeter_data] PRIMARY KEY ([id])
 );
 
 -- environment_data

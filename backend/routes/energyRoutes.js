@@ -15,6 +15,10 @@ router.post('/notification/update', energyController.notificationUpdate);
 // Get energy data for a room
 router.get('/room/:roomId', energyController.getRoomEnergy);
 
+// Report: aggregated series from energy_data
+router.get('/devices', energyController.getEnergyDevices);
+router.get('/report', energyController.getEnergyReport);
+
 module.exports = router;
 
 

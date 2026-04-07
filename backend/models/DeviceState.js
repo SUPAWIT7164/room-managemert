@@ -38,22 +38,13 @@ class DeviceState {
     static async upsertRoomStateByDeviceId(roomId, deviceId, deviceType, status, settings = null) {
         const settingsJson = settings ? JSON.stringify(settings) : null;
         const statusValue = status ? 1 : 0;
-        const [existing] = await pool.query(`SELECT id FROM device_states WHERE device_id = ?`, [deviceId]);
-        if (existing.length > 0) {
-            await pool.query(
-                `UPDATE device_states
-                 SET status = ?, settings = ?, updated_at = GETDATE(),
-                     room_id = ?, area_id = NULL, device_type = ?, device_index = NULL
-                 WHERE device_id = ?`,
-                [statusValue, settingsJson, roomId, deviceType, deviceId]
-            );
-        } else {
-            await pool.query(
-                `INSERT INTO device_states (device_id, room_id, area_id, device_type, device_index, status, settings, created_at, updated_at)
-                 VALUES (?, ?, NULL, ?, NULL, ?, ?, GETDATE(), GETDATE())`,
-                [deviceId, roomId, deviceType, statusValue, settingsJson]
-            );
-        }
+        await pool.query(
+            `INSERT INTO device_states
+                (device_id, room_id, area_id, device_type, device_index, status, settings, created_at, updated_at)
+             VALUES
+                (?, ?, NULL, ?, NULL, ?, ?, GETDATE(), GETDATE())`,
+            [deviceId, roomId, deviceType, statusValue, settingsJson]
+        );
         return true;
     }
 
@@ -88,22 +79,44 @@ class DeviceState {
     static async upsertAreaStateByDeviceId(areaId, deviceId, deviceType, status, settings = null) {
         const settingsJson = settings ? JSON.stringify(settings) : null;
         const statusValue = status ? 1 : 0;
-        const [existing] = await pool.query(`SELECT id FROM device_states WHERE device_id = ?`, [deviceId]);
-        if (existing.length > 0) {
-            await pool.query(
-                `UPDATE device_states
-                 SET status = ?, settings = ?, updated_at = GETDATE(),
-                     area_id = ?, room_id = NULL, device_type = ?, device_index = NULL
-                 WHERE device_id = ?`,
-                [statusValue, settingsJson, areaId, deviceType, deviceId]
-            );
-        } else {
-            await pool.query(
-                `INSERT INTO device_states (device_id, area_id, room_id, device_type, device_index, status, settings, created_at, updated_at)
-                 VALUES (?, ?, NULL, ?, NULL, ?, ?, GETDATE(), GETDATE())`,
-                [deviceId, areaId, deviceType, statusValue, settingsJson]
-            );
-        }
+        const areaDeviceIndexRaw = await this.getAreaDeviceIndexForDeviceId(areaId, deviceType, deviceId);
+        const areaDeviceIndex = areaDeviceIndexRaw != null ? areaDeviceIndexRaw : Number(deviceId);
+
+        // Important:
+        // บน SQL Server อาจมี unique constraint ทำให้ INSERT อย่างเดียวล้มเหลว
+        // (กรณี HA เปิดสำเร็จแต่ DB ไม่อัปเดต -> UI ยังแสดงปิด)
+        // ดังนั้นทำเป็น "upsert" แบบ: UPDATE ก่อน ถ้าไม่เจอค่อย INSERT
+
+        // 1) Try update by device_id (stable identity)
+        const updateByDeviceId = await pool.execute(
+            `UPDATE device_states
+             SET area_id = ?, room_id = NULL, device_type = ?, device_index = ?, status = ?, settings = ?, updated_at = GETDATE()
+             WHERE device_id = ?`,
+            [areaId, deviceType, areaDeviceIndex, statusValue, settingsJson, deviceId]
+        );
+
+        if (updateByDeviceId?.affectedRows > 0) return true;
+
+        // 2) Fallback update by (area_id, device_type, device_index)
+        // (ช่วยกรณีแถวเก่าบางส่วนอาจไม่มี/มี device_id ไม่ครบ)
+        const updateByAreaIndex = await pool.execute(
+            `UPDATE device_states
+             SET area_id = ?, room_id = NULL, device_type = ?, device_index = ?, status = ?, settings = ?, device_id = ?, updated_at = GETDATE()
+             WHERE area_id = ? AND device_type = ? AND device_index = ?`,
+            [areaId, deviceType, areaDeviceIndex, statusValue, settingsJson, deviceId, areaId, deviceType, areaDeviceIndex]
+        );
+
+        if (updateByAreaIndex?.affectedRows > 0) return true;
+
+        // 3) Not found: insert new row
+        await pool.execute(
+            `INSERT INTO device_states
+                (device_id, area_id, room_id, device_type, device_index, status, settings, created_at, updated_at)
+             VALUES
+                (?, ?, NULL, ?, ?, ?, ?, GETDATE(), GETDATE())`,
+            [deviceId, areaId, deviceType, areaDeviceIndex, statusValue, settingsJson]
+        );
+
         return true;
     }
 
@@ -128,7 +141,13 @@ class DeviceState {
 
     /** Single row from device_states by devices.id */
     static async getStateByDeviceId(deviceId) {
-        const [rows] = await pool.query('SELECT * FROM device_states WHERE device_id = ?', [deviceId]);
+        const [rows] = await pool.query(
+            `SELECT TOP 1 *
+             FROM device_states
+             WHERE device_id = ?
+             ORDER BY updated_at DESC, created_at DESC, id DESC`,
+            [deviceId]
+        );
         if (!rows || rows.length === 0) return null;
         return this._rowToStateEntry(rows[0], deviceId);
     }
@@ -137,13 +156,18 @@ class DeviceState {
     static async getByRoom(roomId) {
         const idsByType = await this.listRoomDeviceIdsByType(roomId);
         const [rows] = await pool.query(
-            'SELECT * FROM device_states WHERE room_id = ? AND device_id IS NOT NULL',
+            `SELECT *
+             FROM device_states
+             WHERE room_id = ? AND device_id IS NOT NULL
+             ORDER BY updated_at DESC, created_at DESC, id DESC`,
             [roomId]
         );
 
         const byDeviceId = new Map();
         (rows || []).forEach((row) => {
-            if (row.device_id != null) byDeviceId.set(Number(row.device_id), row);
+            if (row.device_id != null && !byDeviceId.has(Number(row.device_id))) {
+                byDeviceId.set(Number(row.device_id), row);
+            }
         });
 
         const build = (type, ids) =>
@@ -206,13 +230,18 @@ class DeviceState {
     static async getByArea(areaId) {
         const idsByType = await this.listAreaDeviceIdsByType(areaId);
         const [rows] = await pool.query(
-            'SELECT * FROM device_states WHERE area_id = ? AND device_id IS NOT NULL',
+            `SELECT *
+             FROM device_states
+             WHERE area_id = ? AND device_id IS NOT NULL
+             ORDER BY updated_at DESC, created_at DESC, id DESC`,
             [areaId]
         );
 
         const byDeviceId = new Map();
         (rows || []).forEach((row) => {
-            if (row.device_id != null) byDeviceId.set(Number(row.device_id), row);
+            if (row.device_id != null && !byDeviceId.has(Number(row.device_id))) {
+                byDeviceId.set(Number(row.device_id), row);
+            }
         });
 
         const build = (type, ids) =>

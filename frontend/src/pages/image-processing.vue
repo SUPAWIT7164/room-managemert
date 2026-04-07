@@ -64,6 +64,30 @@ const totalPeople = computed(() => {
   return total
 })
 
+/** จุดกลาง polygon (0–1) สำหรับวาง badge จำนวนคนบนแผนผัง */
+const areaCountBadges = computed(() => {
+  return areas.value
+    .filter(a => a.points && a.points.length >= 3)
+    .map((area) => {
+      let cx = 0
+      let cy = 0
+      area.points.forEach(p => {
+        cx += p.x
+        cy += p.y
+      })
+      cx /= area.points.length
+      cy /= area.points.length
+      const idx = areas.value.findIndex(a => a.id === area.id)
+      return {
+        id: area.id,
+        name: area.name,
+        leftPct: cx * 100,
+        topPct: cy * 100,
+        color: area.color || getAreaColor(idx >= 0 ? idx : 0),
+      }
+    })
+})
+
 const loadConfig = async () => {
   try {
     const res = await api.get('/floor-plan/config')
@@ -211,39 +235,6 @@ const redrawCanvas = () => {
     ctx.strokeStyle = color
     ctx.lineWidth = 2.5
     ctx.stroke()
-
-    // Compute centroid for label
-    let cx = 0, cy = 0
-    area.points.forEach(p => { cx += p.x; cy += p.y })
-    cx = (cx / area.points.length) * w
-    cy = (cy / area.points.length) * h
-
-    const countData = peopleCounts.value[area.name]
-    const count = countData?.count ?? '—'
-    const label = area.name
-    const countStr = `${count} คน`
-
-    // Background for label
-    ctx.font = 'bold 14px sans-serif'
-    const labelW = Math.max(ctx.measureText(label).width, ctx.measureText(countStr).width) + 20
-    const labelH = 52
-    const rx = cx - labelW / 2
-    const ry = cy - labelH / 2
-
-    ctx.fillStyle = hexToRgba(color, 0.85)
-    roundRect(ctx, rx, ry, labelW, labelH, 8)
-    ctx.fill()
-
-    // Area name
-    ctx.fillStyle = '#ffffff'
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.font = 'bold 13px sans-serif'
-    ctx.fillText(label, cx, cy - 10)
-
-    // People count
-    ctx.font = 'bold 18px sans-serif'
-    ctx.fillText(countStr, cx, cy + 12)
   })
 
   // Draw current drawing points
@@ -277,20 +268,6 @@ const hexToRgba = (hex, alpha) => {
   const g = parseInt(hex.slice(3, 5), 16)
   const b = parseInt(hex.slice(5, 7), 16)
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
-}
-
-const roundRect = (ctx, x, y, w, h, r) => {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.lineTo(x + w - r, y)
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r)
-  ctx.lineTo(x + w, y + h - r)
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
-  ctx.lineTo(x + r, y + h)
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r)
-  ctx.lineTo(x, y + r)
-  ctx.quadraticCurveTo(x, y, x + r, y)
-  ctx.closePath()
 }
 
 // Drawing
@@ -424,7 +401,7 @@ watch(peopleCounts, () => {
                 </VAvatar>
                 <div>
                   <h1 class="text-h3 text-white mb-1">
-                    Floor Plan
+                    image-processing
                   </h1>
                   <p class="text-body-1 text-white" style="opacity: 0.85;">
                     แผนผังชั้นและจำนวนผู้ใช้งานในแต่ละพื้นที่
@@ -587,6 +564,29 @@ watch(peopleCounts, () => {
                 :class="{ 'canvas-drawing': drawMode }"
                 @click="onCanvasClick"
               />
+
+              <div
+                v-for="badge in areaCountBadges"
+                :key="badge.id"
+                class="floor-plan-count-badge"
+                :style="{
+                  left: `${badge.leftPct}%`,
+                  top: `${badge.topPct}%`,
+                  borderColor: badge.color,
+                  backgroundColor: hexToRgba(badge.color, 0.92),
+                }"
+              >
+                <div class="floor-plan-count-badge__name text-caption text-white text-center font-weight-bold text-truncate px-1">
+                  {{ badge.name }}
+                </div>
+                <div class="floor-plan-count-badge__row d-flex align-center justify-center gap-1 text-white">
+                  <VIcon icon="tabler-users" size="20" color="white" />
+                  <span class="text-h6 font-weight-bold lh-1">
+                    {{ peopleCounts[badge.name]?.count ?? '—' }}
+                  </span>
+                  <span class="text-body-2">คน</span>
+                </div>
+              </div>
 
               <!-- Loading overlay -->
               <div v-if="loading" class="floor-plan-loading">
@@ -819,6 +819,30 @@ watch(peopleCounts, () => {
 .floor-plan-canvas.canvas-drawing {
   pointer-events: auto;
   cursor: crosshair;
+}
+
+.floor-plan-count-badge {
+  position: absolute;
+  z-index: 6;
+  transform: translate(-50%, -50%);
+  min-width: 88px;
+  max-width: min(200px, 42vw);
+  padding: 6px 10px 8px;
+  border-radius: 10px;
+  border: 2px solid;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+}
+
+.floor-plan-count-badge__name {
+  max-width: 100%;
+  opacity: 0.95;
+  line-height: 1.2;
+  margin-bottom: 2px;
+}
+
+.floor-plan-count-badge__row {
+  white-space: nowrap;
 }
 
 .floor-plan-loading {

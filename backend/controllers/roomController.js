@@ -6,6 +6,8 @@ const DevicePosition = require('../models/DevicePosition');
 const { pool } = require('../config/database');
 const roomControlProxyService = require('../services/roomControlProxyService');
 const homeAssistantService = require('../services/homeAssistantService');
+const homeAssistantSyncService = require('../services/homeAssistantSyncService');
+const environmentalHaSyncService = require('../services/environmentalHaSyncService');
 
 /**
  * ดึงสถานะอุปกรณ์จาก Home Assistant โดยใช้ entity_id จากตาราง devices
@@ -82,17 +84,21 @@ async function fetchDeviceStatesFromHomeAssistant(roomId) {
                     console.log(`[RoomController] HA AC ${entityId}: ${isOn ? 'ON' : 'OFF'}, mode=${mode}, temp=${temperature}`);
                 }
 
-                // ERV devices
+                // ERV devices — โหมด/ระดับลมจาก sensor+script เดียวกับ sync service
                 if (deviceType === 'erv' || entityId.includes('erv')) {
                     const isOn = stateStr === 'on';
+                    let settings = { mode: 'normal', speed: 'low' };
+                    try {
+                        const extra = await homeAssistantSyncService.fetchErvModeAndSpeedFromHomeAssistant(entityId);
+                        settings = { mode: extra.mode, speed: extra.speed };
+                    } catch (ervExtraErr) {
+                        console.warn(`[RoomController] ERV mode/speed from HA failed for ${entityId}:`, ervExtraErr.message);
+                    }
                     result.erv.push({
                         status: isOn,
-                        settings: {
-                            mode: 'normal',
-                            speed: 'medium'
-                        }
+                        settings
                     });
-                    console.log(`[RoomController] HA ERV ${entityId}: ${isOn ? 'ON' : 'OFF'}`);
+                    console.log(`[RoomController] HA ERV ${entityId}: ${isOn ? 'ON' : 'OFF'}, mode=${settings.mode}, speed=${settings.speed}`);
                 }
             } catch (err) {
                 console.warn(`[RoomController] Failed to get HA state for ${entityId}:`, err.message);
@@ -1055,15 +1061,62 @@ class RoomController {
                 return res.status(400).json({ success: false, message: 'room id ไม่ถูกต้อง' });
             }
 
+            // ดึงค่าล่าสุดจาก Home Assistant ลง environmental_data ก่อน (ถ้าเปิด HA และห้องมี aqi/am319)
+            try {
+                const syncResult = await environmentalHaSyncService.syncEnvironmentalFromHaForRoom(roomId);
+                if (syncResult.ok && syncResult.reason === 'inserted') {
+                    console.log(`[RoomController] environmental HA sync for room ${roomId}:`, syncResult.reason);
+                }
+            } catch (syncErr) {
+                console.warn('[RoomController] environmental HA sync skipped:', syncErr.message);
+            }
+
             let row = null;
             try {
-                const [rows] = await pool.query(
-                    `SELECT TOP 1 temperature, humidity, co2, tvoc, pressure, pm25, pm10, hcho, noise, timestamp
-                     FROM environmental_data
-                     WHERE room_id = ?
-                     ORDER BY timestamp DESC`,
+                // อุปกรณ์คุณภาพอากาศ (AQI / AM319): ใช้ devices.id เป็น device_id ใน environmental_data
+                const [aqiDevices] = await pool.query(
+                    `SELECT d.id FROM devices d
+                     LEFT JOIN device_types dt ON d.device_type_id = dt.id
+                     WHERE d.room_id = ?
+                     AND (d.disable = 0 OR d.disable IS NULL)
+                     AND (
+                       LOWER(LTRIM(RTRIM(ISNULL(d.device_type, N'')))) IN (N'aqi', N'am319')
+                       OR LOWER(LTRIM(RTRIM(ISNULL(d.code, N'')))) IN (N'aqi', N'am319')
+                       OR LOWER(LTRIM(RTRIM(ISNULL(d.code, N'')))) LIKE N'am319%'
+                       OR LOWER(LTRIM(RTRIM(ISNULL(d.code, N'')))) LIKE N'aqi%'
+                       OR LOWER(LTRIM(RTRIM(ISNULL(dt.name, N'')))) IN (N'aqi', N'am319')
+                       OR LOWER(LTRIM(RTRIM(ISNULL(dt.name, N'')))) LIKE N'am319%'
+                       OR LOWER(LTRIM(RTRIM(ISNULL(dt.name, N'')))) LIKE N'aqi%'
+                     )`,
                     [roomId]
                 );
+                const aqiDeviceIds = (aqiDevices || [])
+                    .map((r) => r.id)
+                    .filter((id) => id != null)
+                    .map((id) => Number(id));
+
+                let rows = [];
+                if (aqiDeviceIds.length > 0) {
+                    const inPlaceholders = aqiDeviceIds.map(() => '?').join(', ');
+                    // รองรับข้อมูลที่ ingest ใส่แค่ device_id โดย room_id ยังเป็น NULL
+                    [rows] = await pool.query(
+                        `SELECT TOP 1 temperature, humidity, co2, tvoc, pressure, pm25, pm10, hcho, noise, timestamp
+                         FROM environmental_data
+                         WHERE device_id IN (${inPlaceholders})
+                         AND (room_id IS NULL OR room_id = ?)
+                         ORDER BY timestamp DESC`,
+                        [...aqiDeviceIds, roomId]
+                    );
+                }
+                if (!rows || !rows[0]) {
+                    [rows] = await pool.query(
+                        `SELECT TOP 1 temperature, humidity, co2, tvoc, pressure, pm25, pm10, hcho, noise, timestamp
+                         FROM environmental_data
+                         WHERE room_id = ?
+                         ORDER BY timestamp DESC`,
+                        [roomId]
+                    );
+                }
                 row = rows && rows[0];
             } catch (dbErr) {
                 console.warn('[RoomController] environmental_data query failed:', dbErr.message);

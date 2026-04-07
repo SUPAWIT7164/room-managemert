@@ -22,6 +22,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   const user = ref(getStoredUser())
   const token = ref(getStoredToken())
+  const hasFaceRegistered = ref(null)
 
   // Getters
   const isAuthenticated = computed(() => !!token.value)
@@ -104,9 +105,35 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function fetchFaceRegistrationStatus(force = false) {
+    if (!token.value) {
+      hasFaceRegistered.value = null
+      return false
+    }
+
+    if (!force && hasFaceRegistered.value !== null)
+      return hasFaceRegistered.value
+
+    try {
+      const response = await api.get('/face/check')
+      hasFaceRegistered.value = response?.data?.data?.hasFace === true
+      return hasFaceRegistered.value
+    } catch (error) {
+      // อย่าบล็อกการใช้งานถ้า endpoint ล้มเหลวชั่วคราว
+      console.warn('Face status check failed:', error?.message || error)
+      hasFaceRegistered.value = null
+      return true
+    }
+  }
+
+  function setFaceRegistrationStatus(value) {
+    hasFaceRegistered.value = value === true
+  }
+
   function setAuth(newToken, userData, rememberMe = false) {
     token.value = newToken
     user.value = userData
+    hasFaceRegistered.value = null
     
     // Save rememberMe preference
     if (rememberMe) {
@@ -127,6 +154,7 @@ export const useAuthStore = defineStore('auth', () => {
   function clearAuth() {
     token.value = null
     user.value = null
+    hasFaceRegistered.value = null
     
     // Clear both storages
     localStorage.removeItem('token')
@@ -140,6 +168,7 @@ export const useAuthStore = defineStore('auth', () => {
     // State
     user,
     token,
+    hasFaceRegistered,
     // Getters
     isAuthenticated,
     isAdmin,
@@ -151,6 +180,8 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     fetchProfile,
     changePassword,
+    fetchFaceRegistrationStatus,
+    setFaceRegistrationStatus,
     setAuth,
     clearAuth,
   }

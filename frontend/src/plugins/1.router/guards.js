@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 export const setupGuards = router => {
   // 👉 router.beforeEach
   // Docs: https://router.vuejs.org/guide/advanced/navigation-guards.html#global-before-guards
-  router.beforeEach(to => {
+  router.beforeEach(async to => {
     const authStore = useAuthStore()
     
     /*
@@ -50,6 +50,17 @@ export const setupGuards = router => {
     // Check approver routes
     if (to.meta.approver && !authStore.isApprover) {
       return isLoggedIn ? { name: 'not-authorized' } : { name: 'login' }
+    }
+
+    // บังคับลงทะเบียนใบหน้าก่อนใช้งานหน้าอื่นครั้งแรกหลัง login
+    if (isLoggedIn && to.path !== '/face/register') {
+      const hasFace = await authStore.fetchFaceRegistrationStatus()
+      if (!hasFace) {
+        return {
+          path: '/face/register',
+          query: { to: to.fullPath },
+        }
+      }
     }
     
     // Only check CASL permissions if route has action/subject defined

@@ -139,6 +139,8 @@ const cctvRoutes = routeLoad('cctvRoutes', () => require('./routes/cctvRoutes'))
 const serviceUserRoutes = routeLoad('serviceUserRoutes', () => require('./routes/serviceUserRoutes'));
 const environmentRoutes = routeLoad('environmentRoutes', () => require('./routes/environmentRoutes'));
 const energyRoutes = routeLoad('energyRoutes', () => require('./routes/energyRoutes'));
+const waterRoutes = routeLoad('waterRoutes', () => require('./routes/waterRoutes'));
+const utilitiesRoutes = routeLoad('utilitiesRoutes', () => require('./routes/utilitiesRoutes'));
 const snapshotRoutes = routeLoad('snapshotRoutes', () => require('./routes/snapshotRoutes'));
 const floorPlanRoutes = routeLoad('floorPlanRoutes', () => require('./routes/floorPlanRoutes'));
 
@@ -162,6 +164,8 @@ if (cctvRoutes) app.use('/api/cctv', cctvRoutes);
 if (serviceUserRoutes) app.use('/api/service-users', serviceUserRoutes);
 if (environmentRoutes) app.use('/api/environment', environmentRoutes);
 if (energyRoutes) app.use('/api/energy', energyRoutes);
+if (waterRoutes) app.use('/api/water', waterRoutes);
+if (utilitiesRoutes) app.use('/api/utilities', utilitiesRoutes);
 if (snapshotRoutes) app.use('/api/snapshot', snapshotRoutes);
 if (floorPlanRoutes) app.use('/api/floor-plan', floorPlanRoutes);
 
@@ -185,6 +189,8 @@ if (cctvRoutes) app.use('/cctv', cctvRoutes);
 if (serviceUserRoutes) app.use('/service-users', serviceUserRoutes);
 if (environmentRoutes) app.use('/environment', environmentRoutes);
 if (energyRoutes) app.use('/energy', energyRoutes);
+if (waterRoutes) app.use('/water', waterRoutes);
+if (utilitiesRoutes) app.use('/utilities', utilitiesRoutes);
 if (snapshotRoutes) app.use('/snapshot', snapshotRoutes);
 if (floorPlanRoutes) app.use('/floor-plan', floorPlanRoutes);
 

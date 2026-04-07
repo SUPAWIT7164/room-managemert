@@ -71,6 +71,11 @@ class User {
         return rows[0];
     }
 
+    static async findByEmployeeId(employeeId) {
+        const [rows] = await pool.query('SELECT * FROM users WHERE employee_id = ? LIMIT 1', [employeeId]);
+        return rows[0];
+    }
+
     static async findByUsername(username) {
         // Search by email, name, or employee_id
         const [rows] = await pool.query(
@@ -83,6 +88,24 @@ class User {
     static async findByEmailOrUsername(identifier) {
         const [rows] = await pool.query('SELECT * FROM users WHERE email = ? OR email = ?', [identifier, identifier]);
         return rows[0];
+    }
+
+    static async findByLdapIdentity({ email, employeeId, username }) {
+        const candidates = [email, employeeId, username]
+            .map((v) => String(v || '').trim())
+            .filter(Boolean);
+        if (!candidates.length) return null;
+
+        for (const value of candidates) {
+            const [rows] = await pool.query(
+                `SELECT * FROM users
+                 WHERE email = ? OR employee_id = ? OR name = ?
+                 ORDER BY id ASC LIMIT 1`,
+                [value, value, value]
+            );
+            if (rows[0]) return rows[0];
+        }
+        return null;
     }
 
     static async create(userData) {
@@ -140,6 +163,55 @@ class User {
     static async updatePassword(userId, hashedPassword) {
         await pool.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, userId]);
         return true;
+    }
+
+    static async createLdapUser(profile) {
+        const randomPassword = await bcrypt.hash(`ldap-${Date.now()}-${Math.random()}`, 10);
+        const email = String(profile.email || '').trim() || `${profile.username}@local.invalid`;
+        const name = String(profile.name || profile.username || 'LDAP User').trim();
+        const employeeId = String(profile.employeeId || profile.username || '').trim() || null;
+
+        const [result] = await pool.query(
+            `INSERT INTO users (name, email, phone, department, position, employee_id, is_active, password, created_at, updated_at, last_login_at)
+             VALUES (?, ?, ?, ?, ?, ?, 1, ?, GETDATE(), GETDATE(), GETDATE())`,
+            [
+                name,
+                email,
+                profile.phone || null,
+                profile.department || null,
+                profile.position || null,
+                employeeId,
+                randomPassword,
+            ]
+        );
+
+        const insertedId = result.insertId || result.recordset?.[0]?.id;
+        if (insertedId) return this.findById(insertedId);
+
+        const [rows] = await pool.query('SELECT * FROM users WHERE email = ? ORDER BY id DESC LIMIT 1', [email]);
+        return rows[0] || null;
+    }
+
+    static async updateLdapProfile(userId, profile) {
+        await pool.query(
+            `UPDATE users
+             SET name = ?, email = ?, phone = ?, department = ?, position = ?, employee_id = ?, last_login_at = GETDATE(), updated_at = GETDATE()
+             WHERE id = ?`,
+            [
+                profile.name || null,
+                profile.email || null,
+                profile.phone || null,
+                profile.department || null,
+                profile.position || null,
+                profile.employeeId || null,
+                userId,
+            ]
+        );
+        return this.findById(userId);
+    }
+
+    static async touchLastLogin(userId) {
+        await pool.query('UPDATE users SET last_login_at = GETDATE(), updated_at = GETDATE() WHERE id = ?', [userId]);
     }
 
     static async count(options = {}) {

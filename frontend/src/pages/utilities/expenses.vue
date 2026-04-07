@@ -17,7 +17,6 @@ const loading = ref(false)
 const selectedPeriod = ref('month') // 'week', 'month', 'year'
 const selectedYear = ref(new Date().getFullYear())
 const selectedMonth = ref(new Date().getMonth() + 1)
-const selectedWeek = ref(null)
 
 // Chart refs for toolbar control
 const costChartRef = ref(null)
@@ -214,81 +213,52 @@ const formatNumber = (num) => {
   }).format(num)
 }
 
-// Generate mock data
-const generateMockData = () => {
-  const data = []
-  let days = 0
-  let startDate = new Date()
-  
-  if (selectedPeriod.value === 'week') {
-    days = 7
-    startDate.setDate(startDate.getDate() - 6) // Last 7 days including today
-  } else if (selectedPeriod.value === 'month') {
-    days = 30
-    startDate.setDate(startDate.getDate() - 29) // Last 30 days
-  } else if (selectedPeriod.value === 'year') {
-    // For year, generate data for the selected year
-    const year = selectedYear.value || new Date().getFullYear()
-    startDate = new Date(year, 0, 1) // January 1st of selected year
-    const endDate = new Date(year, 11, 31) // December 31st of selected year
-    days = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1 // Total days in year
-  }
-  
-  for (let i = 0; i < days; i++) {
-    const date = new Date(startDate)
-    if (selectedPeriod.value === 'year') {
-      date.setDate(date.getDate() + i)
-    } else {
-      date.setDate(startDate.getDate() + i)
-    }
-    
-    // Skip if date is in the future
-    if (date > new Date()) {
-      continue
-    }
-    
-    const electricityUsage = (Math.random() * 50 + 100).toFixed(2)
-    const waterUsage = (Math.random() * 10 + 20).toFixed(2)
-    const electricityCost = parseFloat(electricityUsage) * expenses.value.electricity.rate
-    const waterCost = parseFloat(waterUsage) * expenses.value.water.rate
-    
-    data.push({
-      date: date.toISOString().split('T')[0],
-      electricity: {
-        usage: parseFloat(electricityUsage),
-        cost: electricityCost,
-      },
-      water: {
-        usage: parseFloat(waterUsage),
-        cost: waterCost,
-      },
-      total: electricityCost + waterCost,
-    })
-  }
-  
-  return data
-}
-
 // Load expenses data
 const loadExpensesData = async () => {
   loading.value = true
   
   try {
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 500))
-    
-    // Generate mock data
-    const mockData = generateMockData()
+    const params = {
+      period: selectedPeriod.value,
+      year: selectedYear.value,
+      ...(selectedPeriod.value === 'month' ? { month: selectedMonth.value } : {}),
+    }
+
+    const res = await api.get('/utilities/expenses', { params })
+    if (!res?.data?.success) {
+      throw new Error(res?.data?.message || 'Failed to load utilities expenses')
+    }
+
+    const records = res.data.data?.records || []
+
+    const historyRows = records.map(r => {
+      const dateStr =
+        typeof r.date === 'string'
+          ? r.date.split('T')[0]
+          : new Date(r.date).toISOString().split('T')[0]
+
+      const electricityUsage = parseFloat(r.electricity_kwh || 0)
+      const waterUsage = parseFloat(r.water_m3 || 0)
+      const electricityCost = electricityUsage * expenses.value.electricity.rate
+      const waterCost = waterUsage * expenses.value.water.rate
+
+      return {
+        date: dateStr,
+        electricity: { usage: electricityUsage, cost: electricityCost },
+        water: { usage: waterUsage, cost: waterCost },
+        total: electricityCost + waterCost,
+      }
+    })
     
     // Calculate totals
-    const electricityTotal = mockData.reduce((sum, d) => sum + d.electricity.usage, 0)
-    const waterTotal = mockData.reduce((sum, d) => sum + d.water.usage, 0)
-    const electricityCostTotal = mockData.reduce((sum, d) => sum + d.electricity.cost, 0)
-    const waterCostTotal = mockData.reduce((sum, d) => sum + d.water.cost, 0)
+    const electricityTotal = historyRows.reduce((sum, d) => sum + d.electricity.usage, 0)
+    const waterTotal = historyRows.reduce((sum, d) => sum + d.water.usage, 0)
+    const electricityCostTotal = historyRows.reduce((sum, d) => sum + d.electricity.cost, 0)
+    const waterCostTotal = historyRows.reduce((sum, d) => sum + d.water.cost, 0)
     
     // Get current and previous period
-    const currentPeriodData = mockData.slice(-7) // Last 7 days
-    const previousPeriodData = mockData.slice(-14, -7) // Previous 7 days
+    const currentPeriodData = historyRows.slice(-7) // Last 7 days
+    const previousPeriodData = historyRows.slice(-14, -7) // Previous 7 days
     
     const currentElectricity = currentPeriodData.reduce((sum, d) => sum + d.electricity.usage, 0)
     const previousElectricity = previousPeriodData.reduce((sum, d) => sum + d.electricity.usage, 0)
@@ -301,7 +271,7 @@ const loadExpensesData = async () => {
         previous: previousElectricity,
         total: electricityTotal,
         unit: 'kWh',
-        rate: 3.5,
+        rate: expenses.value.electricity.rate,
         cost: electricityCostTotal,
       },
       water: {
@@ -309,29 +279,31 @@ const loadExpensesData = async () => {
         previous: previousWater,
         total: waterTotal,
         unit: 'ลบ.ม.',
-        rate: 15,
+        rate: expenses.value.water.rate,
         cost: waterCostTotal,
       },
-      history: mockData,
+      history: historyRows,
     }
     
     // Prepare chart data
     chartData.value = {
-      electricity: mockData.map(d => ({
+      electricity: historyRows.map(d => ({
         x: new Date(d.date).getTime(),
         y: d.electricity.cost,
       })),
-      water: mockData.map(d => ({
+      water: historyRows.map(d => ({
         x: new Date(d.date).getTime(),
         y: d.water.cost,
       })),
-      total: mockData.map(d => ({
+      total: historyRows.map(d => ({
         x: new Date(d.date).getTime(),
         y: d.total,
       })),
     }
   } catch (error) {
     console.error('Error loading expenses data:', error)
+    expenses.value.history = []
+    chartData.value = { electricity: [], water: [], total: [] }
   } finally {
     loading.value = false
   }

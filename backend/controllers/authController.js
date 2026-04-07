@@ -1,6 +1,27 @@
 const User = require('../models/User');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const ldapAuthService = require('../services/ldapAuthService');
+
+async function resolveUserAfterLdap(ldapProfile, fallbackUsername) {
+    const normalized = {
+        username: String(ldapProfile?.username || fallbackUsername || '').trim(),
+        name: ldapProfile?.name || fallbackUsername,
+        email: ldapProfile?.email || null,
+        employeeId: ldapProfile?.employeeId || fallbackUsername,
+        department: ldapProfile?.department || null,
+        phone: ldapProfile?.phone || null,
+        position: ldapProfile?.position || null,
+    };
+
+    let user = await User.findByLdapIdentity(normalized);
+    if (!user) {
+        user = await User.createLdapUser(normalized);
+    } else {
+        user = await User.updateLdapProfile(user.id, normalized);
+    }
+    return user;
+}
 
 class AuthController {
     // Register
@@ -103,50 +124,62 @@ class AuthController {
         try {
             const { username, password } = req.body;
 
-            // Find user
             let user;
-            try {
-                user = await User.findByUsername(username);
-            } catch (dbError) {
-                // Check if it's a database connection error
-                if (dbError.code === 'ETIMEDOUT' || dbError.code === 'ECONNREFUSED' || dbError.code === 'ENOTFOUND') {
-                    console.error('Database connection error:', dbError.message);
-                    return res.status(503).json({ 
-                        success: false, 
-                        message: 'ไม่สามารถเชื่อมต่อฐานข้อมูลได้ กรุณาลองใหม่อีกครั้งในภายหลัง' 
+            let usedLdap = false;
+            const ldapResult = await ldapAuthService.authenticate(username, password);
+            if (ldapResult.success) {
+                user = await resolveUserAfterLdap(ldapResult.user, username);
+                usedLdap = true;
+            } else {
+                // fallback local auth
+                try {
+                    user = await User.findByUsername(username);
+                } catch (dbError) {
+                    if (dbError.code === 'ETIMEDOUT' || dbError.code === 'ECONNREFUSED' || dbError.code === 'ENOTFOUND') {
+                        console.error('Database connection error:', dbError.message);
+                        return res.status(503).json({
+                            success: false,
+                            message: 'ไม่สามารถเชื่อมต่อฐานข้อมูลได้ กรุณาลองใหม่อีกครั้งในภายหลัง'
+                        });
+                    }
+                    throw dbError;
+                }
+
+                if (!user) {
+                    return res.status(401).json({
+                        success: false,
+                        message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'
                     });
                 }
-                // Re-throw if it's a different error
-                throw dbError;
+
+                // Verify password (handle Laravel $2y$ hash)
+                let passwordHash = user.password;
+                if (passwordHash.startsWith('$2y$')) {
+                    passwordHash = '$2b$' + passwordHash.substring(4);
+                }
+
+                const isValidPassword = await bcrypt.compare(password, passwordHash);
+                if (!isValidPassword) {
+                    return res.status(401).json({
+                        success: false,
+                        message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'
+                    });
+                }
+                await User.touchLastLogin(user.id);
             }
-            
+
             if (!user) {
-                return res.status(401).json({ 
-                    success: false, 
-                    message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' 
+                return res.status(401).json({
+                    success: false,
+                    message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'
                 });
             }
 
             // Check if user is active
             if (!user.is_active) {
-                return res.status(403).json({ 
-                    success: false, 
-                    message: 'บัญชีถูกระงับการใช้งาน' 
-                });
-            }
-
-            // Verify password (handle Laravel $2y$ hash)
-            let passwordHash = user.password;
-            // Convert Laravel's $2y$ to Node.js bcrypt's $2b$
-            if (passwordHash.startsWith('$2y$')) {
-                passwordHash = '$2b$' + passwordHash.substring(4);
-            }
-            
-            const isValidPassword = await bcrypt.compare(password, passwordHash);
-            if (!isValidPassword) {
-                return res.status(401).json({ 
-                    success: false, 
-                    message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' 
+                return res.status(403).json({
+                    success: false,
+                    message: 'บัญชีถูกระงับการใช้งาน'
                 });
             }
 
@@ -180,7 +213,7 @@ class AuthController {
 
             res.json({
                 success: true,
-                message: 'เข้าสู่ระบบสำเร็จ',
+                message: usedLdap ? 'เข้าสู่ระบบสำเร็จ (LDAP)' : 'เข้าสู่ระบบสำเร็จ',
                 data: {
                     token,
                     user: {

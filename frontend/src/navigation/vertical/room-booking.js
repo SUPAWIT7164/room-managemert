@@ -89,8 +89,8 @@ export default [
       //   to: 'reports-current-service-users',
       // },
       {
-        title: 'Floor Plan',
-        to: 'floor-plan',
+        title: 'image-processing',
+        to: 'image-processing',
       },
     ],
   },

@@ -171,11 +171,13 @@ class Device {
              LEFT JOIN device_types dt ON d.device_type_id = dt.id
              WHERE d.room_id = ? 
              AND (
-                 d.device_type IN ('light','ac','erv','vent_fan','am319') 
-                  OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) IN ('light','ac','erv','air','vent_fan','fan','exhaust_fan','ventilation_fan','am319')
+                 d.device_type IN ('light','ac','erv','vent_fan','am319','aqi') 
+                  OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) IN ('light','ac','erv','air','vent_fan','fan','exhaust_fan','ventilation_fan','am319','aqi')
                   OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) LIKE 'am319%'
-                  OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) = 'am319'
+                  OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) LIKE 'aqi%'
+                  OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) IN ('am319','aqi')
                   OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) LIKE 'am319%'
+                  OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) LIKE 'aqi%'
              )
              AND (d.disable = 0 OR d.disable IS NULL)
              ORDER BY COALESCE(d.device_type, d.code), d.id`,
@@ -187,8 +189,9 @@ class Device {
             if (type) type = String(type).toLowerCase().trim();
             if (type === 'air') type = 'ac';
             if (type === 'fan' || type === 'exhaust_fan' || type === 'ventilation_fan') type = 'vent_fan';
-            // code เช่น am319-1 หรือชื่อใน device_types ที่ขึ้นต้น am319
+            // AM319 / AQI บนแปลนใช้กลุ่มเดียวกัน (positions.am319)
             if (type && type.startsWith('am319')) type = 'am319';
+            if (type === 'aqi' || (type && type.startsWith('aqi'))) type = 'am319';
             if (!positions[type]) return;
             const x = row.x != null ? parseFloat(String(row.x).replace(/[^0-9.-]/g, '')) : null;
             const y = row.y != null ? parseFloat(String(row.y).replace(/[^0-9.-]/g, '')) : null;
@@ -224,10 +227,12 @@ class Device {
                  LEFT JOIN device_types dt ON d.device_type_id = dt.id
                  WHERE d.room_id = ? 
                  AND (
-                    d.device_type = 'am319'
+                    d.device_type IN ('am319','aqi')
                     OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) LIKE 'am319%'
-                    OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) = 'am319'
+                    OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) LIKE 'aqi%'
+                    OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) IN ('am319','aqi')
                     OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) LIKE 'am319%'
+                    OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) LIKE 'aqi%'
                  )
                  AND (d.disable = 0 OR d.disable IS NULL)
                  ORDER BY d.id`;

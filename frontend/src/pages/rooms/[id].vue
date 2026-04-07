@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/utils/api'
+import { useAuthStore } from '@/stores/auth'
 
 definePage({
   meta: {
@@ -11,13 +12,17 @@ definePage({
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const room = ref(null)
 const todayBookings = ref([])
 const loading = ref(true)
 const loadingBookings = ref(true)
 const error = ref(null)
+const imageUploading = ref(false)
+const imageUploadError = ref(null)
 
 const roomId = computed(() => route.params.id)
+const isSuperAdmin = computed(() => authStore.isSuperAdmin)
 
 // Base URL for uploads (same origin as API but /uploads path)
 const uploadsBaseUrl = computed(() => {
@@ -28,9 +33,55 @@ const uploadsBaseUrl = computed(() => {
 const roomImageUrl = computed(() => {
   if (!room.value?.image) return null
   const img = room.value.image
-  if (img.startsWith('http')) return img
-  return `${uploadsBaseUrl.value}/uploads/${img}`
+  if (typeof img !== 'string') return null
+  const v = img.trim()
+  if (!v) return null
+  if (v.startsWith('http')) return v
+  // Backend save format is usually `/uploads/room_images/<filename>`
+  if (v.startsWith('/uploads/')) return `${uploadsBaseUrl.value}${v}`
+  if (v.startsWith('uploads/')) return `${uploadsBaseUrl.value}/${v}`
+  // Fallback: treat as filename stored under `/uploads/<filename>`
+  return `${uploadsBaseUrl.value}/uploads/${v}`
 })
+
+const roomImageFileInputRef = ref(null)
+
+const triggerRoomImageUpload = () => {
+  if (!isSuperAdmin.value || imageUploading.value) return
+  roomImageFileInputRef.value?.click()
+}
+
+const onRoomImageFileChange = async (e) => {
+  if (!isSuperAdmin.value) return
+
+  const file = e.target?.files?.[0]
+  if (!file) return
+
+  imageUploading.value = true
+  imageUploadError.value = null
+
+  try {
+    const MAX_SIZE_BYTES = 10 * 1024 * 1024 // keep in sync with backend
+    if (file.size > MAX_SIZE_BYTES) {
+      throw new Error('ไฟล์ใหญ่เกินไป (สูงสุด 10MB)')
+    }
+
+    const formData = new FormData()
+    formData.append('image', file)
+
+    const response = await api.post(`/rooms/${roomId.value}/upload-image`, formData)
+    const data = response?.data?.data
+
+    if (data?.room) room.value = data.room
+    else await fetchRoom()
+  } catch (err) {
+    imageUploadError.value = err?.response?.data?.message || err?.message || 'อัปโหลดไม่สำเร็จ'
+  } finally {
+    imageUploading.value = false
+    // allow selecting the same file again
+    if (roomImageFileInputRef.value) roomImageFileInputRef.value.value = ''
+  }
+}
 
 const fetchRoom = async () => {
   loading.value = true
@@ -170,7 +221,13 @@ onMounted(async () => {
         <VCard class="room-detail-card">
           <VCardText>
             <div class="text-center mb-4">
-              <div class="image-upload-overlay">
+              <div
+                class="image-upload-overlay"
+                :class="{ 'image-upload-overlay--disabled': !isSuperAdmin }"
+                role="button"
+                tabindex="0"
+                @click="triggerRoomImageUpload"
+              >
                 <img
                   v-if="roomImageUrl"
                   :src="roomImageUrl"
@@ -183,7 +240,25 @@ onMounted(async () => {
                   :alt="room.name"
                   class="room-image"
                 >
+
+                <input
+                  ref="roomImageFileInputRef"
+                  type="file"
+                  accept="image/*"
+                  class="room-image-file-input"
+                  :disabled="!isSuperAdmin || imageUploading"
+                  @change="onRoomImageFileChange"
+                >
               </div>
+
+              <VAlert
+                v-if="imageUploadError"
+                type="error"
+                variant="tonal"
+                class="mt-2"
+              >
+                {{ imageUploadError }}
+              </VAlert>
             </div>
 
             <div class="room-details">
@@ -431,6 +506,7 @@ onMounted(async () => {
 <style scoped>
 .room-detail-page {
   /* max-width managed by global .v-container */
+  padding: 0;
 }
 
 .room-detail-card,
@@ -455,6 +531,14 @@ onMounted(async () => {
 .image-upload-overlay {
   position: relative;
   display: inline-block;
+}
+
+.image-upload-overlay--disabled {
+  cursor: not-allowed;
+}
+
+.room-image-file-input {
+  display: none;
 }
 
 .room-details {

@@ -71,13 +71,14 @@ class Face {
             // Use SQL Server date function
             const dateFunction = 'GETDATE()';
 
-            // Use image_base64 if available, otherwise use face_encoding
+            // SQL Server schema ปัจจุบัน face_encoding เป็น NOT NULL
+            // จึงต้องเขียน face_encoding ทุกครั้ง แม้มี image_base64 แล้ว
             if (hasImageBase64) {
                 console.log(`[Face.create] Inserting into image_base64 column`);
                 const result = await pool.execute(
-                    `INSERT INTO faces (user_id, image_base64, is_active, registered_at, created_at, updated_at) 
-                     VALUES (?, ?, 1, ${dateFunction}, ${dateFunction}, ${dateFunction})`,
-                    [userId, imageBase64]
+                    `INSERT INTO faces (user_id, face_encoding, image_base64, image_path, is_active, registered_at, created_at, updated_at) 
+                     VALUES (?, ?, ?, ?, 1, ${dateFunction}, ${dateFunction}, ${dateFunction})`,
+                    [userId, imageBase64, imageBase64, 'stored_in_db']
                 );
                 console.log(`[Face.create] Insert successful, insertId: ${result.insertId}`);
                 return { id: result.insertId, user_id: userId, image_base64: imageBase64 };
@@ -85,9 +86,9 @@ class Face {
                 // Fallback: store in face_encoding
                 console.log(`[Face.create] Inserting into face_encoding column (fallback)`);
                 const result = await pool.execute(
-                    `INSERT INTO faces (user_id, face_encoding, is_active, registered_at, created_at, updated_at) 
-                     VALUES (?, ?, 1, ${dateFunction}, ${dateFunction}, ${dateFunction})`,
-                    [userId, imageBase64]
+                    `INSERT INTO faces (user_id, face_encoding, image_path, is_active, registered_at, created_at, updated_at) 
+                     VALUES (?, ?, ?, 1, ${dateFunction}, ${dateFunction}, ${dateFunction})`,
+                    [userId, imageBase64, 'stored_in_db']
                 );
                 console.log(`[Face.create] Insert successful, insertId: ${result.insertId}`);
                 return { id: result.insertId, user_id: userId, face_encoding: imageBase64 };
@@ -124,8 +125,8 @@ class Face {
             if (hasImageBase64) {
                 console.log(`[Face.update] Updating image_base64 column`);
                 await pool.execute(
-                    `UPDATE faces SET image_base64 = ?, updated_at = ${dateFunction} WHERE user_id = ?`,
-                    [imageBase64, userId]
+                    `UPDATE faces SET face_encoding = ?, image_base64 = ?, updated_at = ${dateFunction} WHERE user_id = ?`,
+                    [imageBase64, imageBase64, userId]
                 );
                 console.log(`[Face.update] Update successful`);
             } else {
