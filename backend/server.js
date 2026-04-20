@@ -169,6 +169,15 @@ if (utilitiesRoutes) app.use('/api/utilities', utilitiesRoutes);
 if (snapshotRoutes) app.use('/api/snapshot', snapshotRoutes);
 if (floorPlanRoutes) app.use('/api/floor-plan', floorPlanRoutes);
 
+// Public config endpoint (no auth) — refresh intervals ฯลฯ
+const { getRefreshIntervals } = require('./config/refreshIntervals');
+app.get('/api/config/refresh-intervals', (_req, res) => {
+    res.json({ success: true, data: getRefreshIntervals() });
+});
+app.get('/config/refresh-intervals', (_req, res) => {
+    res.json({ success: true, data: getRefreshIntervals() });
+});
+
 // When behind IIS Application "api", path is relative (e.g. /auth/login not /api/auth/login)
 if (authRoutes) app.use('/auth', authRoutes);
 if (userRoutes) app.use('/users', userRoutes);
@@ -238,6 +247,16 @@ const server = app.listen(PORT, () => {
     testConnection().then(connected => {
         if (connected) {
             console.log('✅ Database connection successful');
+            // Start periodic sync: image_processing_logs → people_count
+            const peopleCountSync = require('./services/peopleCountSyncService');
+            const syncIntervalMs = parseInt(process.env.REFRESH_PEOPLE_COUNT_INTERVAL_MS) || 10000;
+            peopleCountSync.syncFromImageProcessingLogs()
+                .then(r => console.log(`[PeopleCountSync] Initial sync: ${r.inserted} records`))
+                .catch(e => console.warn('[PeopleCountSync] Initial sync failed:', e.message));
+            setInterval(() => {
+                peopleCountSync.syncFromImageProcessingLogs().catch(() => {});
+            }, syncIntervalMs);
+            console.log(`[PeopleCountSync] Auto-sync every ${syncIntervalMs}ms`);
         } else {
             console.log('⚠️  Database connection failed - some features may not work');
             console.log('   💡 Tip: ตรวจสอบการตั้งค่าในไฟล์ .env และ SQL Server service');

@@ -34,6 +34,37 @@ BEGIN
 END
 GO
 
+-- Drop legacy columns if they still exist
+IF COL_LENGTH(N'dbo.watermeter_data', N'device_type_id') IS NOT NULL
+BEGIN
+    ALTER TABLE [dbo].[watermeter_data] DROP COLUMN [device_type_id];
+END
+GO
+
+IF COL_LENGTH(N'dbo.watermeter_data', N'buildings_id') IS NOT NULL
+BEGIN
+    ALTER TABLE [dbo].[watermeter_data] DROP COLUMN [buildings_id];
+END
+GO
+
+IF COL_LENGTH(N'dbo.watermeter_data', N'building_id') IS NOT NULL
+BEGIN
+    ALTER TABLE [dbo].[watermeter_data] DROP COLUMN [building_id];
+END
+GO
+
+IF COL_LENGTH(N'dbo.watermeter_data', N'room_id') IS NOT NULL
+BEGIN
+    ALTER TABLE [dbo].[watermeter_data] DROP COLUMN [room_id];
+END
+GO
+
+IF COL_LENGTH(N'dbo.watermeter_data', N'area_id') IS NOT NULL
+BEGIN
+    ALTER TABLE [dbo].[watermeter_data] DROP COLUMN [area_id];
+END
+GO
+
 IF NOT EXISTS (
     SELECT 1 FROM sys.indexes
     WHERE name = N'idx_watermeter_data_recorded_at'

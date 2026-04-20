@@ -1,4 +1,5 @@
 const { pool } = require('../config/database');
+const peopleCountSync = require('../services/peopleCountSyncService');
 
 class FloorPlanController {
     async getConfig(req, res) {
@@ -47,38 +48,73 @@ class FloorPlanController {
 
     /**
      * GET /api/floor-plan/people-counts
-     * ดึงจำนวนคนที่นับได้ล่าสุดจาก image_processing_detections
-     * วิธีคิด: หา id ล่าสุดที่ person_index=0 (จุดเริ่มต้น batch ใหม่) แล้วนับแถวตั้งแต่จุดนั้น = จำนวนคน
+     * ดึงจำนวนคนล่าสุดจาก people_count table (synced from image_processing_logs)
+     * device_id มาจาก devices table, people_count/faces_count/confidence มาจาก image_processing_logs
+     *
+     * Query (optional):
+     *   - roomId: ดึง people_count ผ่าน devices.room_id
+     *   - areaId: ดึง people_count ผ่าน devices.area_id (ยังไม่ใช้ แต่รองรับ)
+     *   - sync: ถ้า =1 จะ sync จาก image_processing_logs ก่อนดึงข้อมูล
      */
     async getPeopleCounts(req, res) {
         try {
-            const count = await this._getLatestPersonCount();
-            console.log('[FloorPlan] latest person count:', count);
-            if (count !== null) {
-                return res.json({ success: true, data: { _all: { count } } });
+            // Auto-sync new records from image_processing_logs → people_count
+            if (req.query.sync === '1') {
+                await peopleCountSync.syncFromImageProcessingLogs();
+            }
+
+            const roomIdRaw = req.query.roomId;
+            const areaIdRaw = req.query.areaId;
+            const roomId = roomIdRaw != null && roomIdRaw !== '' ? parseInt(roomIdRaw, 10) : NaN;
+            const areaId = areaIdRaw != null && areaIdRaw !== '' ? parseInt(areaIdRaw, 10) : NaN;
+
+            let result = null;
+
+            if (Number.isFinite(roomId)) {
+                result = await peopleCountSync.getLatestByRoomId(roomId);
+            }
+
+            if (!result) {
+                result = await peopleCountSync.getLatestGlobal();
+            }
+
+            if (result && result.people_count != null) {
+                console.log('[FloorPlan] people_count:', result.people_count,
+                    'faces:', result.faces_count,
+                    'confidence:', result.confidence,
+                    Number.isFinite(roomId) ? `(room ${roomId})` : '(global)');
+                return res.json({
+                    success: true,
+                    data: {
+                        _all: {
+                            count: result.people_count,
+                            faces_count: result.faces_count,
+                            confidence: result.confidence,
+                            recorded_at: result.recorded_at || null,
+                            device_id: result.device_id || null,
+                        },
+                    },
+                });
             }
         } catch (err) {
-            console.warn('[FloorPlan] _getLatestPersonCount failed:', err.message);
+            console.warn('[FloorPlan] getPeopleCounts failed:', err.message);
         }
 
         return res.json({ success: true, data: {} });
     }
 
-    async _getLatestPersonCount() {
-        // หา batch ล่าสุด: id ล่าสุดที่ person_index = 0 คือจุดเริ่มของรอบนับล่าสุด
-        // จำนวนคน = จำนวนแถวที่ id >= จุดเริ่มนั้น
-        const [rows] = await pool.query(`
-            SELECT COUNT(*) as people_count
-            FROM image_processing_detections
-            WHERE id >= (
-                SELECT MAX(id) FROM image_processing_detections WHERE person_index = 0
-            )
-        `);
-
-        if (rows && rows.length > 0 && rows[0].people_count != null) {
-            return Number(rows[0].people_count);
+    /**
+     * POST /api/floor-plan/people-counts/sync
+     * Manually trigger sync from image_processing_logs → people_count
+     */
+    async syncPeopleCounts(req, res) {
+        try {
+            const result = await peopleCountSync.syncFromImageProcessingLogs();
+            return res.json({ success: true, data: result });
+        } catch (err) {
+            console.error('[FloorPlan] syncPeopleCounts error:', err.message);
+            return res.status(500).json({ success: false, message: err.message });
         }
-        return null;
     }
 
     /**
@@ -111,8 +147,8 @@ class FloorPlanController {
             results.sampleRows = sample || [];
 
             try {
-                const count = await this._getLatestPersonCount();
-                results.latestCount = count;
+                const latest = await peopleCountSync.getLatestGlobal();
+                results.latestCount = latest ? latest.people_count : null;
             } catch (e) {
                 results.latestCount = 'error: ' + e.message;
             }

@@ -68,6 +68,25 @@ definePage({
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+
+// Refresh intervals (โหลดจาก backend env ตอน mount — fallback 10 วิ)
+const refreshIntervals = reactive({
+  sensorIntervalMs: 10000,
+  deviceStateIntervalMs: 10000,
+  peopleCountIntervalMs: 10000,
+  floorPlanIntervalMs: 10000,
+})
+
+const loadRefreshIntervals = async () => {
+  try {
+    const res = await api.get('/config/refresh-intervals')
+    if (res.data?.success && res.data.data) {
+      Object.assign(refreshIntervals, res.data.data)
+    }
+  } catch (e) {
+    console.warn('[Config] refresh-intervals fallback to defaults:', e?.message)
+  }
+}
 const loading = ref(false)
 const buildings = ref([])
 const areas = ref([])
@@ -674,6 +693,8 @@ const devicePositions = reactive({
   vent_fan: [],
   /** จุดยึดแถว AM319 (device_type = am319 ในตาราง devices) — แสดง 9 sensor เรียงในแนวนอน */
   am319: [],
+  /** จุดยึดการ์ด people count (device_type = peoplecount หรือ device_type_id = 16) */
+  peoplecount: [],
 })
 
 /** ลำดับการแสดงบนแปลนห้อง (ค่าจาก environmental_data ตาม room_id) */
@@ -740,6 +761,72 @@ const getSensorValue = (sensorType) => {
 }
 
 const getSensorUnit = (sensorType) => sensorTypeDefinitions[sensorType]?.unit || ''
+
+/** จำนวนคนล่าสุดจาก image_processing_detections (GET /floor-plan/people-counts?roomId=) */
+const imageProcessingPeople = reactive({
+  count: null,
+  recorded_at: null,
+})
+
+const fetchImageProcessingPeopleCount = async () => {
+  if (!selectedRoomId.value) return
+  try {
+    const res = await api.get('/floor-plan/people-counts', {
+      params: { roomId: selectedRoomId.value },
+    })
+    const all = res.data?.data?._all
+    if (all && all.count != null) {
+      imageProcessingPeople.count = Number(all.count)
+      imageProcessingPeople.recorded_at = all.recorded_at || null
+    } else {
+      imageProcessingPeople.count = null
+      imageProcessingPeople.recorded_at = null
+    }
+  } catch (e) {
+    console.warn('[Control] people-count (image processing) failed:', e?.message)
+    imageProcessingPeople.count = null
+    imageProcessingPeople.recorded_at = null
+  }
+}
+
+const peopleCountOverlayStyle = computed(() => {
+  const pc = devicePositions.peoplecount
+  if (pc && pc.length > 0) {
+    return {
+      left: `${pc[0].x}%`,
+      top: `${pc[0].y}%`,
+      '--pc-transform': 'translate(-50%, -50%)',
+    }
+  }
+  const am = devicePositions.am319
+  if (am && am.length > 0) {
+    const y = Math.min(82, Number(am[0].y) + 12)
+    return {
+      left: `${am[0].x}%`,
+      top: `${y}%`,
+      '--pc-transform': 'translate(-50%, -50%)',
+    }
+  }
+  return {
+    left: '50%',
+    bottom: '9%',
+    '--pc-transform': 'translateX(-50%)',
+  }
+})
+
+const peopleCountOverlayTitle = computed(() => {
+  if (imageProcessingPeople.count == null) {
+    return 'จำนวนคน — ยังไม่มีข้อมูลจาก Image processing'
+  }
+  const t = imageProcessingPeople.recorded_at
+  const head = `จำนวนคน: ${imageProcessingPeople.count} (Image processing)`
+  if (!t) return head
+  try {
+    return `${head} · อัปเดต ${new Date(t).toLocaleString('th-TH')}`
+  } catch {
+    return head
+  }
+})
 
 // Drag for sensor overlays
 const draggingSensor = ref(false)
@@ -918,6 +1005,7 @@ const loadRoomDevices = async () => {
   devicePositions.erv = []
   devicePositions.vent_fan = []
   devicePositions.am319 = []
+  devicePositions.peoplecount = []
 
   // Initialize with empty arrays (will be populated from API data)
   const tempDeviceStates = {
@@ -1131,6 +1219,8 @@ const loadRoomDevices = async () => {
   
   // ดึงค่าเซ็นเซอร์: ถ้ามี am319 ในห้อง → environmental_data ตาม room_id, ไม่เช่นนั้น → HA endpoint เดิม
   startSensorDataAutoRefresh()
+  startPeopleCountAutoRefresh()
+  startDeviceStateAutoRefresh()
 }
 
 const toggleControl = async (type) => {
@@ -1948,6 +2038,9 @@ const applyDevicePositions = (positions) => {
   if (positions.am319 && Array.isArray(positions.am319)) {
     devicePositions.am319 = [...positions.am319]
   }
+  if (positions.peoplecount && Array.isArray(positions.peoplecount)) {
+    devicePositions.peoplecount = [...positions.peoplecount]
+  }
 }
 
 // Load device positions from API (ใช้ตำแหน่งจาก DB โดยตรง ไม่ใช้ default)
@@ -1977,6 +2070,9 @@ const loadDevicePositions = async () => {
       if (positions.am319 && Array.isArray(positions.am319)) {
         devicePositions.am319 = positions.am319
       }
+      if (positions.peoplecount && Array.isArray(positions.peoplecount)) {
+        devicePositions.peoplecount = positions.peoplecount
+      }
     }
     // ถ้าไม่มีข้อมูลจาก API ให้ใช้ array เปล่า (ไม่แสดงไอคอน)
   } catch (error) {
@@ -1998,6 +2094,7 @@ const saveDevicePositions = async () => {
     vent_fan: [...devicePositions.vent_fan],
     light: [...devicePositions.light],
     am319: [...devicePositions.am319],
+    peoplecount: [...devicePositions.peoplecount],
   }
   
   console.log('กำลังบันทึกตำแหน่ง:', positions)
@@ -2222,13 +2319,13 @@ const updateCO2Chart = (co2Value) => {
   }, 0)
 }
 
-// Auto-refresh sensor overlay / environmental data ทุก 10 วินาที
+// --- Auto-refresh: AQI / environmental sensor overlay ---
 const startSensorDataAutoRefresh = () => {
   if (sensorDataRefreshInterval.value) {
     clearInterval(sensorDataRefreshInterval.value)
   }
 
-  const refresh = () => {
+  const refreshSensor = () => {
     const hasAm319Row = devicePositions.am319 && devicePositions.am319.length > 0
     if (hasAm319Row && selectedRoomId.value) {
       fetchRoomEnvironmentalData()
@@ -2237,15 +2334,93 @@ const startSensorDataAutoRefresh = () => {
     }
   }
 
-  refresh()
-  sensorDataRefreshInterval.value = setInterval(refresh, 10000)
+  refreshSensor()
+  sensorDataRefreshInterval.value = setInterval(refreshSensor, refreshIntervals.sensorIntervalMs)
 }
 
-// Stop auto-refresh for sensor data
 const stopSensorDataAutoRefresh = () => {
   if (sensorDataRefreshInterval.value) {
     clearInterval(sensorDataRefreshInterval.value)
     sensorDataRefreshInterval.value = null
+  }
+}
+
+// --- Auto-refresh: people count overlay ---
+const peopleCountRefreshInterval = ref(null)
+
+const startPeopleCountAutoRefresh = () => {
+  if (peopleCountRefreshInterval.value) {
+    clearInterval(peopleCountRefreshInterval.value)
+  }
+  fetchImageProcessingPeopleCount()
+  peopleCountRefreshInterval.value = setInterval(fetchImageProcessingPeopleCount, refreshIntervals.peopleCountIntervalMs)
+}
+
+const stopPeopleCountAutoRefresh = () => {
+  if (peopleCountRefreshInterval.value) {
+    clearInterval(peopleCountRefreshInterval.value)
+    peopleCountRefreshInterval.value = null
+  }
+}
+
+// --- Auto-refresh: device icon states (light/ac/erv/vent_fan) ในมุมมองห้อง ---
+const deviceStateRefreshInterval = ref(null)
+const isRefreshingDeviceStates = ref(false)
+
+async function refreshRoomDeviceStatesOnly() {
+  if (!selectedRoomId.value || isRefreshingDeviceStates.value) return
+  isRefreshingDeviceStates.value = true
+  try {
+    const response = await api.get(`/rooms/${selectedRoomId.value}/devices`)
+    const devices = response.data?.data || {}
+    const ds = devices.deviceStates || {}
+
+    const toBool = (s) => {
+      if (s == null) return false
+      if (typeof s === 'object') {
+        const v = s.status
+        return v === true || v === 1 || v === 'on'
+      }
+      return s === true || s === 1 || s === 'on'
+    }
+
+    const lightArr = Array.isArray(ds.light) ? ds.light.map(toBool) : []
+    const acArr = Array.isArray(ds.ac) ? ds.ac.map(toBool) : []
+    const ervArr = Array.isArray(ds.erv) ? ds.erv.map(toBool) : []
+    const ventArr = Array.isArray(ds.vent_fan) ? ds.vent_fan.map(toBool) : []
+
+    deviceStates.light.splice(0, deviceStates.light.length, ...lightArr)
+    deviceStates.ac.splice(0, deviceStates.ac.length, ...acArr)
+    deviceStates.erv.splice(0, deviceStates.erv.length, ...ervArr)
+    deviceStates.vent_fan.splice(0, deviceStates.vent_fan.length, ...ventArr)
+
+    controls.light = lightArr.some(Boolean)
+    controls.ac = acArr.some(Boolean)
+    controls.erv = ervArr.some(Boolean)
+    controls.vent_fan = ventArr.some(Boolean)
+  } catch (error) {
+    console.warn('[Control] refreshRoomDeviceStatesOnly failed:', error?.message)
+  } finally {
+    isRefreshingDeviceStates.value = false
+  }
+}
+
+const startDeviceStateAutoRefresh = () => {
+  if (deviceStateRefreshInterval.value) {
+    clearInterval(deviceStateRefreshInterval.value)
+  }
+  refreshRoomDeviceStatesOnly()
+  deviceStateRefreshInterval.value = setInterval(() => {
+    if (selectedRoomId.value) {
+      refreshRoomDeviceStatesOnly()
+    }
+  }, refreshIntervals.deviceStateIntervalMs)
+}
+
+const stopDeviceStateAutoRefresh = () => {
+  if (deviceStateRefreshInterval.value) {
+    clearInterval(deviceStateRefreshInterval.value)
+    deviceStateRefreshInterval.value = null
   }
 }
 
@@ -3146,20 +3321,18 @@ const loadAllRoomDeviceStates = async () => {
   loadRoomControlPositions()
 }
 
-// Start auto-refresh for room device states
+// Start auto-refresh for room device states (floor plan view)
 const startRoomStatesAutoRefresh = () => {
-  // Clear existing interval if any
   if (roomStatesRefreshInterval.value) {
     clearInterval(roomStatesRefreshInterval.value)
   }
   
-  // Set up new interval to refresh every 5 seconds
   roomStatesRefreshInterval.value = setInterval(async () => {
     if (showFloorPlan.value) {
       console.log('Auto-refreshing room device states...')
       await loadAllRoomDeviceStates()
     }
-  }, 5000) // Refresh every 5 seconds
+  }, refreshIntervals.floorPlanIntervalMs)
 }
 
 // Stop auto-refresh for room device states
@@ -3667,6 +3840,11 @@ watch(selectedRoomId, () => {
   if (selectedRoomId.value) {
     loadRoomDevices()
     loadEnergyData()
+  } else {
+    imageProcessingPeople.count = null
+    imageProcessingPeople.recorded_at = null
+    stopPeopleCountAutoRefresh()
+    stopDeviceStateAutoRefresh()
   }
 })
 
@@ -3750,12 +3928,15 @@ const fetchDeviceTypes = async () => {
 }
 
 onMounted(async () => {
+  await loadRefreshIntervals()
   fetchDeviceTypes()
 })
 
 onBeforeUnmount(() => {
-  // Stop sensor data auto-refresh
+  // Stop all auto-refresh timers
   stopSensorDataAutoRefresh()
+  stopPeopleCountAutoRefresh()
+  stopDeviceStateAutoRefresh()
   
   // Destroy chart instance when component is unmounted
   if (co2ChartInstance.value) {
@@ -4150,7 +4331,7 @@ onBeforeUnmount(() => {
                       >
                         {{ Math.round(area.width) }}% × {{ Math.round(area.height) }}%
                       </div>
-                      <!-- ปุ่ม เปิด/ปิด (เมื่อ area มีห้องและไม่ใช่โหมดแก้ไข) -->
+                      <!-- ปุ่มควบคุมระบบห้อง (เมื่อ area มีห้องและไม่ใช่โหมดแก้ไข) -->
                       <VBtn
                         v-if="!floorPlanEditMode && areaRoomsMap[area.id]"
                         size="small"
@@ -4160,7 +4341,7 @@ onBeforeUnmount(() => {
                         prepend-icon="tabler-power"
                         @click.stop="toggleRoomSystemControl(areaRoomsMap[area.id].id)"
                       >
-                        {{ isRoomSystemsOn(areaRoomsMap[area.id].id) ? 'เปิด' : 'ปิด' }}
+                        ควบคุม
                       </VBtn>
                     </div>
                   </div>
@@ -4640,6 +4821,38 @@ onBeforeUnmount(() => {
                       <div class="sensor-overlay-value">
                         {{ getSensorValue(stype) }}
                         <span class="sensor-overlay-unit">{{ getSensorUnit(stype) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- จำนวนคน (Image processing) — การ์ดเดียวกับ tile สิ่งแวดล้อม / PM2.5 -->
+                <div
+                  class="people-count-ip-row"
+                  :style="peopleCountOverlayStyle"
+                  :title="peopleCountOverlayTitle"
+                  :class="{
+                    'draggable': editMode && isSuperAdmin && devicePositions.peoplecount?.length > 0,
+                    'dragging': dragging && draggedDevice.type === 'peoplecount' && draggedDevice.index === 0,
+                  }"
+                  @mousedown="editMode && isSuperAdmin && devicePositions.peoplecount?.length > 0 && startDrag($event, 'peoplecount', 0)"
+                >
+                  <div
+                    class="sensor-overlay sensor-overlay--inline"
+                    style="--sensor-color: #7e57c2"
+                  >
+                    <div class="sensor-overlay-card">
+                      <VIcon
+                        icon="tabler-users"
+                        size="18"
+                        color="#7e57c2"
+                      />
+                      <div class="sensor-overlay-label">
+                        จำนวนคน
+                      </div>
+                      <div class="sensor-overlay-value">
+                        {{ imageProcessingPeople.count != null ? imageProcessingPeople.count : '—' }}
+                        <span class="sensor-overlay-unit">คน</span>
                       </div>
                     </div>
                   </div>
@@ -6797,6 +7010,38 @@ onBeforeUnmount(() => {
 }
 
 .am319-sensor-row .sensor-overlay-card {
+  min-width: 62px;
+  padding: 5px 6px 4px;
+}
+
+/* จำนวนคน (Image processing) — วางใต้แถว AM319 หรือกลางล่างของแปลน */
+.people-count-ip-row {
+  position: absolute;
+  z-index: 14;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  pointer-events: none;
+  transform: var(--pc-transform, translate(-50%, -50%));
+}
+
+.people-count-ip-row.draggable {
+  cursor: grab;
+  user-select: none;
+}
+
+.people-count-ip-row.draggable:active,
+.people-count-ip-row.dragging {
+  cursor: grabbing;
+  z-index: 100;
+}
+
+.people-count-ip-row .sensor-overlay {
+  pointer-events: auto;
+}
+
+.people-count-ip-row .sensor-overlay-card {
   min-width: 62px;
   padding: 5px 6px 4px;
 }

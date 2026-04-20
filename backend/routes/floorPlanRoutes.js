@@ -8,6 +8,7 @@ router.use(authenticate);
 router.get('/config', floorPlanController.getConfig.bind(floorPlanController));
 router.put('/config', floorPlanController.saveConfig.bind(floorPlanController));
 router.get('/people-counts', floorPlanController.getPeopleCounts.bind(floorPlanController));
+router.post('/people-counts/sync', floorPlanController.syncPeopleCounts.bind(floorPlanController));
 router.get('/debug-detections', floorPlanController.debugDetections.bind(floorPlanController));
 
 module.exports = router;
