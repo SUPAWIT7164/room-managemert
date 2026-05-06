@@ -18,9 +18,14 @@ class QuotaController {
             const hasLaravelStructure = columns.length === 2;
 
             if (!hasLaravelStructure) {
-                // On MSSQL we don't create the Laravel-style settings table; return empty data
+                /* SQL Server: ไม่สร้างตารางจาก Node (createLaravelSettingsTable เป็น MySQL เท่านั้น) */
                 if (DB_TYPE === 'mssql') {
-                    return res.json({ success: true, data: [] });
+                    return res.status(503).json({
+                        success: false,
+                        message:
+                            'ตาราง settings ยังไม่มีใน SQL Server กรุณารันไฟล์ backend/migrations/create_settings_table_mssql.sql แล้วลองใหม่',
+                        data: []
+                    });
                 }
                 try {
                     await createLaravelSettingsTable();

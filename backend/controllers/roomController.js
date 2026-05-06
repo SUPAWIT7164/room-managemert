@@ -1007,6 +1007,9 @@ class RoomController {
             if (!positions.light) positions.light = [];
             if (!positions.ac) positions.ac = [];
             if (!positions.erv) positions.erv = [];
+            if (!positions.vent_fan) positions.vent_fan = [];
+            if (!positions.am319) positions.am319 = [];
+            if (!positions.peoplecount) positions.peoplecount = [];
             
             res.json({
                 success: true,

@@ -166,24 +166,28 @@ class Device {
      */
     static async getPositionsByRoom(roomId) {
         const [rows] = await pool.query(
-            `SELECT d.id, d.device_type, d.code, d.x, d.y, dt.name AS device_type_name
+            `SELECT d.id, d.device_type, d.code, d.x, d.y, d.device_type_id, dt.name AS device_type_name
              FROM devices d
              LEFT JOIN device_types dt ON d.device_type_id = dt.id
              WHERE d.room_id = ? 
              AND (
-                 d.device_type IN ('light','ac','erv','vent_fan','am319','aqi') 
-                  OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) IN ('light','ac','erv','air','vent_fan','fan','exhaust_fan','ventilation_fan','am319','aqi')
+                 d.device_type IN ('light','ac','erv','vent_fan','am319','aqi','peoplecount')
+                 OR d.device_type_id = 16
+                 OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) IN ('light','ac','erv','air','vent_fan','fan','exhaust_fan','ventilation_fan','am319','aqi','peoplecount')
                   OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) LIKE 'am319%'
                   OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) LIKE 'aqi%'
+                 OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) LIKE 'peoplecount%'
                   OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) IN ('am319','aqi')
                   OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) LIKE 'am319%'
                   OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) LIKE 'aqi%'
+                 OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) IN ('peoplecount','people_count')
+                 OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) LIKE 'peoplecount%'
              )
              AND (d.disable = 0 OR d.disable IS NULL)
              ORDER BY COALESCE(d.device_type, d.code), d.id`,
             [roomId]
         );
-        const positions = { light: [], ac: [], erv: [], vent_fan: [], am319: [] };
+        const positions = { light: [], ac: [], erv: [], vent_fan: [], am319: [], peoplecount: [] };
         (rows || []).forEach((row) => {
             let type = row.device_type || row.code || row.device_type_name;
             if (type) type = String(type).toLowerCase().trim();
@@ -192,6 +196,7 @@ class Device {
             // AM319 / AQI บนแปลนใช้กลุ่มเดียวกัน (positions.am319)
             if (type && type.startsWith('am319')) type = 'am319';
             if (type === 'aqi' || (type && type.startsWith('aqi'))) type = 'am319';
+            if (type === 'people_count' || (type && type.startsWith('peoplecount')) || Number(row.device_type_id) === 16) type = 'peoplecount';
             if (!positions[type]) return;
             const x = row.x != null ? parseFloat(String(row.x).replace(/[^0-9.-]/g, '')) : null;
             const y = row.y != null ? parseFloat(String(row.y).replace(/[^0-9.-]/g, '')) : null;
@@ -208,7 +213,7 @@ class Device {
      */
     static async setPositionsByRoom(roomId, positions) {
         console.log(`[Device] setPositionsByRoom roomId=${roomId} positions=`, JSON.stringify(positions));
-        const types = ['light', 'ac', 'erv', 'vent_fan', 'am319'];
+        const types = ['light', 'ac', 'erv', 'vent_fan', 'am319', 'peoplecount'];
         let updatedCount = 0;
         
         for (const deviceType of types) {
@@ -233,6 +238,21 @@ class Device {
                     OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) IN ('am319','aqi')
                     OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) LIKE 'am319%'
                     OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) LIKE 'aqi%'
+                 )
+                 AND (d.disable = 0 OR d.disable IS NULL)
+                 ORDER BY d.id`;
+                params = [roomId];
+            } else if (deviceType === 'peoplecount') {
+                query = `SELECT d.id, d.device_type, d.code, d.x, d.y FROM devices d
+                 LEFT JOIN device_types dt ON d.device_type_id = dt.id
+                 WHERE d.room_id = ?
+                 AND (
+                    d.device_type = 'peoplecount'
+                    OR d.device_type_id = 16
+                    OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) = 'peoplecount'
+                    OR LOWER(LTRIM(RTRIM(ISNULL(d.code,'')))) LIKE 'peoplecount%'
+                    OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) IN ('peoplecount','people_count')
+                    OR LOWER(LTRIM(RTRIM(ISNULL(dt.name,'')))) LIKE 'peoplecount%'
                  )
                  AND (d.disable = 0 OR d.disable IS NULL)
                  ORDER BY d.id`;
