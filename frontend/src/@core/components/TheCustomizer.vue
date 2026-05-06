@@ -47,10 +47,6 @@ const colors = [
     darken: '#0C8485',
   },
   {
-    main: '#FFB400',
-    darken: '#E6A200',
-  },
-  {
     main: '#FF4C51',
     darken: '#E64449',
   },

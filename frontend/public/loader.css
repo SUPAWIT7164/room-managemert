@@ -19,6 +19,16 @@ html {
   inline-size: 100%;
 }
 
+.loading-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.loading-logo img {
+  display: block;
+}
+
 .loading {
   position: relative;
   box-sizing: border-box;

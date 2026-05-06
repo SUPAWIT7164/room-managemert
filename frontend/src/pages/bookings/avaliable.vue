@@ -87,18 +87,6 @@ const roomDetails = computed(() => {
 
 const isSuperAdmin = computed(() => authStore.user?.role === 'super-admin' || authStore.user?.role === 'admin')
 
-// ——— Help Modal ———
-const showHelpModal = ref(false)
-const helpStep = ref(1)
-const helpSteps = [
-  { title: 'เลือกช่วงวันที่', desc: 'คลิกที่ช่อง "เลือกช่วงวันที่" เพื่อเลือกวันที่ที่ต้องการจองห้อง' },
-  { title: 'เลือกห้อง', desc: 'เลือกห้องที่ต้องการแสดงโดยคลิกที่ช่อง checkbox ด้านหน้าชื่อห้อง' },
-  { title: 'ดูตารางการจอง', desc: 'ระบบจะแสดงตารางการจองห้องในวันที่เลือก โดยช่องสีขาวหมายถึงห้องว่าง ช่องสีต่างๆ หมายถึงห้องที่ถูกจองแล้ว' },
-  { title: 'คลิกห้องที่ต้องการจอง', desc: 'คลิกที่ช่องเวลาของห้องที่ต้องการจอง (ช่องสีขาว) เพื่อเปิดหน้าต่างการจอง' },
-  { title: 'กรอกข้อมูลการจอง', desc: 'กรอกชื่อการจอง, ห้อง, วันที่, เวลา, รายละเอียด และอีเมลผู้เข้าร่วม (ถ้ามี)' },
-  { title: 'ยืนยันการจอง', desc: 'ตรวจสอบข้อมูลให้ถูกต้องแล้วคลิกปุ่ม "ยืนยันการจอง" เพื่อบันทึกการจอง' },
-]
-
 // ——— Booking Modal (new / view / edit) ———
 const showBookingModal = ref(false)
 const bookingMode = ref('new') // 'new' | 'view' | 'edit'
@@ -798,10 +786,6 @@ onBeforeUnmount(() => {
                   <p class="text-body-2 mb-0 text-medium-emphasis">เลือกช่วงวันที่และอาคาร เพื่อดูตารางและจองห้อง</p>
                 </div>
               </div>
-              <VBtn color="info" variant="tonal" class="help-btn" @click="showHelpModal = true">
-                <VIcon icon="tabler-help" class="me-2" />
-                วิธีใช้งานการจองห้อง
-              </VBtn>
             </div>
           </VCardText>
         </VCard>
@@ -983,38 +967,6 @@ onBeforeUnmount(() => {
       </VCol>
     </VRow>
 
-    <!-- Help Modal -->
-    <VDialog v-model="showHelpModal" max-width="700" persistent content-class="help-dialog">
-      <VCard class="help-modal-card">
-        <VCardTitle class="d-flex align-center help-modal-title">
-          <VIcon icon="tabler-help" class="me-2" />
-          วิธีใช้งานการจองห้อง
-        </VCardTitle>
-        <VCardText class="help-modal-body">
-          <div class="help-step-indicator mb-4">
-            <span
-              v-for="(_, i) in helpSteps"
-              :key="i"
-              class="help-dot"
-              :class="{ active: helpStep === i + 1 }"
-            />
-          </div>
-          <div v-for="(step, i) in helpSteps" :key="i" v-show="helpStep === i + 1" class="help-step-content">
-            <div class="step-num mb-3">{{ i + 1 }}</div>
-            <h6 class="text-h6 mb-2">{{ step.title }}</h6>
-            <p class="text-body-2 text-medium-emphasis">{{ step.desc }}</p>
-          </div>
-        </VCardText>
-        <VCardActions class="d-flex justify-space-between">
-          <VBtn :disabled="helpStep <= 1" @click="helpStep--">ก่อนหน้า</VBtn>
-          <div class="d-flex gap-2">
-            <VBtn v-if="helpStep < helpSteps.length" color="primary" @click="helpStep++">ถัดไป</VBtn>
-            <VBtn v-else color="success" @click="showHelpModal = false">เสร็จสิ้น</VBtn>
-          </div>
-        </VCardActions>
-      </VCard>
-    </VDialog>
-
     <!-- Booking Modal (จองห้องแบบเดียวกับ calendar: คลิกช่องว่าง → เปิดฟอร์ม → ยืนยันการจอง) -->
     <VDialog v-model="showBookingModal" max-width="700" persistent scrollable>
       <VCard>
@@ -1173,16 +1125,6 @@ onBeforeUnmount(() => {
   color: rgb(var(--v-theme-on-surface));
   text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
 }
-.help-btn {
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0.02em;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-.help-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.25);
-}
 
 /* ——— Filter cards (วันที่ + อาคาร) ——— */
 .filter-card {
@@ -1288,41 +1230,6 @@ onBeforeUnmount(() => {
   opacity: 0.9;
 }
 
-/* ——— Help modal ——— */
-.help-modal-card {
-  border-radius: 16px;
-  overflow: hidden;
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.12);
-}
-.help-modal-title {
-  background: linear-gradient(135deg, rgb(var(--v-theme-primary)) 0%, rgba(118, 75, 162, 0.9) 100%);
-  color: #fff !important;
-  font-weight: 700;
-}
-.help-modal-body {
-  padding: 24px 28px !important;
-}
-.help-step-indicator {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-.help-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.12);
-  transition: all 0.3s ease;
-}
-.help-dot.active {
-  background: rgb(var(--v-theme-primary));
-  transform: scale(1.25);
-  box-shadow: 0 0 0 3px rgba(var(--v-theme-primary), 0.3);
-}
-.help-step-content {
-  min-height: 80px;
-}
 /* ——— Tables container (เหมือน calendar schedule-grid) ——— */
 .tables-container {
   display: flex;
@@ -1736,21 +1643,6 @@ onBeforeUnmount(() => {
 .booking-tooltip div + div { margin-top: 6px; }
 .booking-tooltip strong { color: rgba(255, 255, 255, 0.9); font-weight: 600; }
 
-/* ——— Step number (Help modal) ——— */
-.step-num {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, rgb(var(--v-theme-primary)) 0%, rgba(118, 75, 162, 0.9) 100%);
-  color: #fff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 800;
-  font-size: 1.1rem;
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-}
-
 /* ===== Responsive ===== */
 @media (max-width: 959.98px) {
   .schedule-table thead th.room-column-header,
@@ -1807,16 +1699,6 @@ onBeforeUnmount(() => {
 
   .avaliable-day-card {
     border-radius: 12px;
-  }
-
-  .help-modal-body {
-    padding: 16px !important;
-  }
-
-  .step-num {
-    width: 32px;
-    height: 32px;
-    font-size: 0.95rem;
   }
 }
 </style>

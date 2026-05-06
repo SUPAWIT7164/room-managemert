@@ -51,17 +51,56 @@ class FloorPlanController {
      * วิธีคิด: หา id ล่าสุดที่ person_index=0 (จุดเริ่มต้น batch ใหม่) แล้วนับแถวตั้งแต่จุดนั้น = จำนวนคน
      */
     async getPeopleCounts(req, res) {
+        const areaId = req.query.area_id != null ? Number(req.query.area_id) : null;
+        const roomId = req.query.room_id != null ? Number(req.query.room_id) : null;
+
         try {
+            const hasDisplayConfig = await this._hasPeopleDisplayConfig(areaId, roomId);
+            if (!hasDisplayConfig) {
+                return res.json({ success: true, data: { _all: { enabled: false } } });
+            }
+
             const count = await this._getLatestPersonCount();
             console.log('[FloorPlan] latest person count:', count);
             if (count !== null) {
-                return res.json({ success: true, data: { _all: { count } } });
+                return res.json({ success: true, data: { _all: { count, enabled: true } } });
             }
         } catch (err) {
             console.warn('[FloorPlan] _getLatestPersonCount failed:', err.message);
         }
 
         return res.json({ success: true, data: {} });
+    }
+
+    async _hasPeopleDisplayConfig(areaId, roomId) {
+        const hasArea = Number.isFinite(areaId) && areaId > 0;
+        const hasRoom = Number.isFinite(roomId) && roomId > 0;
+        if (!hasArea && !hasRoom) return false;
+
+        const params = [];
+        let where = [];
+
+        if (hasArea) {
+            where.push('(d.area_id = ?)');
+            params.push(areaId);
+            where.push('(d.room_id IN (SELECT id FROM rooms WHERE area_id = ?))');
+            params.push(areaId);
+        }
+
+        if (hasRoom) {
+            where.push('(d.room_id = ?)');
+            params.push(roomId);
+        }
+
+        const [rows] = await pool.query(
+            `SELECT TOP 1 d.id
+             FROM devices d
+             WHERE (${where.join(' OR ')})
+               AND (d.disable = 0 OR d.disable IS NULL)`
+            , params
+        );
+
+        return Array.isArray(rows) && rows.length > 0;
     }
 
     async _getLatestPersonCount() {

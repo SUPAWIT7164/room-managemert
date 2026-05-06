@@ -1,5 +1,6 @@
-export const staticPrimaryColor = '#FFB400'
-export const staticPrimaryDarkenColor = '#E6A200'
+// Default primary: rgb(44, 175, 0)
+export const staticPrimaryColor = '#2CAF00'
+export const staticPrimaryDarkenColor = '#248A00'
 export const themes = {
   light: {
     dark: false,

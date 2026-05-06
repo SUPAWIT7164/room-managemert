@@ -396,7 +396,7 @@ onMounted(() => {
 
 /* Table Header */
 .v-table thead tr {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background-color: #2caf00;
 }
 
 .v-table thead th {

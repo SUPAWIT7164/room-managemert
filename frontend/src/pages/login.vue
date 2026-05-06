@@ -2,8 +2,7 @@
 import { ref, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import rmutiLogoImage from '@images/RMUTI-logo-color.png'
-import logoImage from '@images/unnamed-1.png'
+import psruLogoImage from '@images/PSURlogo.png'
 
 definePage({
   meta: {
@@ -141,16 +140,16 @@ const loginWithLDAP = async () => {
     <!-- Header Logo and Text -->
     <div class="login-header">
       <img
-        :src="logoImage"
-        alt="Logo"
+        :src="psruLogoImage"
+        alt="PSRU Logo"
         class="header-logo"
       />
       <div class="header-text">
         <div class="header-text-thai">
-          มหาวิทยาลัยเทคโนโลยีราชมงคลอีสาน วิทยาเขตสุรินทร์
+          ศูนย์อาหารทะเลแก้วนิเวศ มหาวิทยาลัยราชภัฏพิบูลสงคราม
         </div>
         <div class="header-text-english">
-          Rajamangala University of Technology Isan SURIN Campus
+          Pibulsongkram Rajabhat University
         </div>
       </div>
     </div>
@@ -162,8 +161,8 @@ const loginWithLDAP = async () => {
     >
       <VCardText class="text-center pa-8 pb-4 flex-grow-0">
         <img
-          :src="rmutiLogoImage"
-          alt="RMUTI Logo"
+          :src="psruLogoImage"
+          alt="PSRU Logo"
           class="auth-card-logo"
         />
       </VCardText>
@@ -283,7 +282,7 @@ const loginWithLDAP = async () => {
 
 .login-page {
   min-height: 100vh;
-  background-image: url('@images/A1006.jpg');
+  background-image: url('@images/ศูนย์อาหารทะเลแก้วนิเวศ.png');
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;

@@ -15,33 +15,36 @@ console.log('[DB] Database type detection:', {
 // SQL Server configuration
 const sql = require('mssql');
 
-const config = {
-    server: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT || 1433),
-    user: process.env.DB_USER || 'sa',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'smart_room_booking',
-    options: {
-        encrypt: process.env.DB_ENCRYPT === 'true', // Use encryption for Azure SQL
-        trustServerCertificate: process.env.DB_TRUST_CERT !== 'false', // Trust self-signed certificates (default: true)
-        enableArithAbort: true,
-        connectionTimeout: 10000, // 10 seconds
-        requestTimeout: 30000, // 30 seconds
-    },
-    pool: {
-        max: 10,
-        min: 0,
-        idleTimeoutMillis: 30000
-    }
-};
+function buildSqlServerConfig(databaseName) {
+    return {
+        server: process.env.DB_HOST || 'localhost',
+        port: parseInt(process.env.DB_PORT || 1433),
+        user: process.env.DB_USER || 'sa',
+        password: process.env.DB_PASSWORD || '',
+        database: databaseName,
+        options: {
+            encrypt: process.env.DB_ENCRYPT === 'true', // Use encryption for Azure SQL
+            trustServerCertificate: process.env.DB_TRUST_CERT !== 'false', // Trust self-signed certificates (default: true)
+            enableArithAbort: true,
+            connectionTimeout: 10000, // 10 seconds
+            requestTimeout: 30000, // 30 seconds
+        },
+        pool: {
+            max: 10,
+            min: 0,
+            idleTimeoutMillis: 30000
+        }
+    };
+}
 
-// Create connection pool
+const dbName = process.env.DB_NAME || 'smart_room_booking';
+const config = buildSqlServerConfig(dbName);
+
 pool = new sql.ConnectionPool(config);
 
-// Connect to the database
 pool.connect()
     .then(() => {
-        console.log('✅ SQL Server connection pool created');
+        console.log('✅ SQL Server connection pool created:', dbName);
     })
     .catch(err => {
         console.error('❌ SQL Server connection pool creation failed:', err.message);
@@ -154,8 +157,8 @@ function convertLimitOffsetForMssql(sql, params = []) {
     return { sql, params };
 }
 
-// Query interface for SQL Server
-const query = async (sqlQuery, params = []) => {
+// Query interface for SQL Server (ผูกกับ connection pool ที่ส่งเข้ามา)
+const makeQuery = (targetPool) => async (sqlQuery, params = []) => {
     try {
         // Convert MySQL-style functions (DATE, CURDATE, NOW) to T-SQL
         const originalQuery = sqlQuery;
@@ -186,8 +189,8 @@ const query = async (sqlQuery, params = []) => {
         // SQL Server query execution
         // Ensure pool is connected
         try {
-            if (!pool.connected) {
-                await pool.connect();
+            if (!targetPool.connected) {
+                await targetPool.connect();
             }
         } catch (connectError) {
             // If already connected, ignore the error
@@ -196,7 +199,7 @@ const query = async (sqlQuery, params = []) => {
             }
         }
         
-        const request = pool.request();
+        const request = targetPool.request();
         
         // Add parameters if provided
         if (params && params.length > 0) {
@@ -262,13 +265,13 @@ const query = async (sqlQuery, params = []) => {
 };
 
 // Execute interface for INSERT/UPDATE/DELETE
-const execute = async (sqlQuery, params = []) => {
+const makeExecute = (targetPool) => async (sqlQuery, params = []) => {
     try {
         // SQL Server execution
         // Ensure pool is connected
         try {
-            if (!pool.connected) {
-                await pool.connect();
+            if (!targetPool.connected) {
+                await targetPool.connect();
             }
         } catch (connectError) {
             // If already connected, ignore the error
@@ -277,7 +280,7 @@ const execute = async (sqlQuery, params = []) => {
             }
         }
         
-        const request = pool.request();
+        const request = targetPool.request();
         
         // Check if this is an INSERT statement and modify to get SCOPE_IDENTITY()
         const isInsert = /^\s*INSERT\s+INTO/i.test(sqlQuery.trim());
@@ -351,6 +354,9 @@ const execute = async (sqlQuery, params = []) => {
     }
 };
 
+const query = makeQuery(pool);
+const execute = makeExecute(pool);
+
 // Create a pool-like object with query and execute methods
 const poolWrapper = {
     query: query,
@@ -378,7 +384,8 @@ const testConnection = async () => {
         
         const request = pool.request();
         await request.query('SELECT 1 as test');
-        console.log(`✅ SQL Server connected successfully to ${process.env.DB_NAME || 'smart_room_booking'}`);
+        console.log(`✅ SQL Server connected successfully to ${dbName}`);
+
         return true;
     } catch (error) {
         console.error(`❌ SQL Server connection failed:`, error.message);
@@ -387,7 +394,7 @@ const testConnection = async () => {
 };
 
 module.exports = { 
-    pool: poolWrapper, 
+    pool: poolWrapper,
     testConnection,
     DB_TYPE,
     dbDriver

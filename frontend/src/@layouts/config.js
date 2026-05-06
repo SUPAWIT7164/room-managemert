@@ -1,11 +1,12 @@
 import { h } from 'vue'
 import { breakpointsVuetify } from '@vueuse/core'
 import { AppContentLayoutNav, ContentWidth, FooterType, HorizontalNavType, NavbarType } from '@layouts/enums'
+import logoImage from '@images/PSURlogo.png'
 
 export const layoutConfig = {
   app: {
     title: 'my-layout',
-    logo: h('img', { src: '/src/assets/logo.svg' }),
+    logo: h('img', { src: logoImage, alt: 'PSRU Logo', style: 'height: 40px; width: auto; object-fit: contain' }),
     contentWidth: ContentWidth.Boxed,
     contentLayoutNav: AppContentLayoutNav.Vertical,
     overlayNavFromBreakpoint: breakpointsVuetify.md,

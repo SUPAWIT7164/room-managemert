@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import VueApexCharts from 'vue3-apexcharts'
 import { useTheme } from 'vuetify'
 import { getMultiLineChartConfig } from '@core/libs/apex-chart/apexCharConfig'
@@ -23,6 +23,7 @@ const showCustomDatePicker = ref(false)
 const loading = ref(false)
 const statusMessage = ref(null)
 const statusType = ref('info')
+let currentDataRefreshTimer = null
 
 // Current values - use default values from cards
 const currentValues = ref({
@@ -71,6 +72,18 @@ onMounted(() => {
   customDateRange.value = `${todayStr} to ${todayStr}`
   loadCurrentData()
   loadEnvironmentalData()
+
+  // Auto refresh current cards every 10 seconds
+  currentDataRefreshTimer = setInterval(() => {
+    loadCurrentData()
+  }, 10000)
+})
+
+onBeforeUnmount(() => {
+  if (currentDataRefreshTimer) {
+    clearInterval(currentDataRefreshTimer)
+    currentDataRefreshTimer = null
+  }
 })
 
 // Watch timeGranularity to show/hide custom date picker

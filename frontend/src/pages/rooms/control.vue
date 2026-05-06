@@ -270,6 +270,9 @@ const selectedRoomTitle = computed(() => {
 const floorPlanEditMode = ref(false)
 // area box แสดงเฉพาะเมื่อ room มี x1,y1,x2,y2 จาก DB — เริ่มต้นเป็น [] ไม่ใช้ demo data
 const floorPlanAreas = ref([])
+const floorPlanPeopleCount = ref(null)
+const floorPlanPeopleCountEnabled = ref(false)
+const peopleCountRefreshInterval = ref(null)
 // อุปกรณ์ระดับ area (area_id, room_id NULL) สำหรับแสดง icon บน floor plan
 const floorPlanAreaDevices = ref({ light: [], ac: [], erv: [], vent_fan: [] })
 // สถานะต่ออุปกรณ์ (เหมือน deviceStates ของ room) — ใช้เมื่อแสดง icon บน floor plan area
@@ -874,6 +877,56 @@ const fetchBuildings = async () => {
     rooms.value = []
   } finally {
     loading.value = false
+  }
+}
+
+const loadFloorPlanPeopleCount = async () => {
+  try {
+    const params = {}
+    const areaId = _toNumOrNull(selectedAreaId.value)
+    if (areaId != null) params.area_id = areaId
+    const roomId = _toNumOrNull(selectedRoomFromQuery.value)
+    if (roomId != null) params.room_id = roomId
+
+    const res = await api.get('/floor-plan/people-counts', { params })
+    const count = res?.data?.data?._all?.count
+    const enabled = res?.data?.data?._all?.enabled
+    floorPlanPeopleCountEnabled.value = enabled === true
+    floorPlanPeopleCount.value = typeof count === 'number' ? count : null
+  } catch (error) {
+    console.warn('[Rooms Control] loadFloorPlanPeopleCount failed:', error?.message)
+    floorPlanPeopleCountEnabled.value = false
+    floorPlanPeopleCount.value = null
+  }
+}
+
+const peopleCountBadgePosition = computed(() => {
+  const area = selectedArea.value
+  if (!area) return null
+
+  const x1 = _toNumOrNull(area.x1)
+  const y1 = _toNumOrNull(area.y1)
+  const x2 = _toNumOrNull(area.x2)
+  const y2 = _toNumOrNull(area.y2)
+
+  if (x1 == null || y1 == null || x2 == null || y2 == null) return null
+
+  return {
+    left: (x1 + x2) / 2,
+    top: Math.max(4, y1 - 3),
+  }
+})
+
+const startPeopleCountAutoRefresh = () => {
+  stopPeopleCountAutoRefresh()
+  loadFloorPlanPeopleCount()
+  peopleCountRefreshInterval.value = setInterval(loadFloorPlanPeopleCount, 30000)
+}
+
+const stopPeopleCountAutoRefresh = () => {
+  if (peopleCountRefreshInterval.value) {
+    clearInterval(peopleCountRefreshInterval.value)
+    peopleCountRefreshInterval.value = null
   }
 }
 
@@ -3717,6 +3770,7 @@ watch(() => route.query, async () => {
     selectedRoomId.value = null
     await fetchBuildings()
     await loadFloorPlanAreas()
+    await loadFloorPlanPeopleCount()
     // Use nextTick to ensure DOM is ready
     await nextTick()
     const hasAreaDevices = (floorPlanAreaDevices.value.light?.length || 0) + (floorPlanAreaDevices.value.ac?.length || 0) + (floorPlanAreaDevices.value.erv?.length || 0) > 0
@@ -3725,9 +3779,11 @@ watch(() => route.query, async () => {
     }
     await loadAllRoomDeviceStates()
     startRoomStatesAutoRefresh()
+    startPeopleCountAutoRefresh()
   } else {
     // Stop auto-refresh when not in floor plan view
     stopRoomStatesAutoRefresh()
+    stopPeopleCountAutoRefresh()
   }
 }, { immediate: true })
 
@@ -3779,6 +3835,7 @@ onBeforeUnmount(() => {
   
   // Stop auto-refresh interval
   stopRoomStatesAutoRefresh()
+  stopPeopleCountAutoRefresh()
 })
 </script>
 
@@ -4150,7 +4207,7 @@ onBeforeUnmount(() => {
                       >
                         {{ Math.round(area.width) }}% × {{ Math.round(area.height) }}%
                       </div>
-                      <!-- ปุ่ม เปิด/ปิด (เมื่อ area มีห้องและไม่ใช่โหมดแก้ไข) -->
+                      <!-- ปุ่มควบคุมระบบห้อง (เมื่อ area มีห้องและไม่ใช่โหมดแก้ไข) -->
                       <VBtn
                         v-if="!floorPlanEditMode && areaRoomsMap[area.id]"
                         size="small"
@@ -4160,10 +4217,20 @@ onBeforeUnmount(() => {
                         prepend-icon="tabler-power"
                         @click.stop="toggleRoomSystemControl(areaRoomsMap[area.id].id)"
                       >
-                        {{ isRoomSystemsOn(areaRoomsMap[area.id].id) ? 'เปิด' : 'ปิด' }}
+                        ควบคุม
                       </VBtn>
                     </div>
                   </div>
+                </div>
+
+                <div
+                  v-if="peopleCountBadgePosition && floorPlanPeopleCountEnabled"
+                  class="people-count-overlay-badge"
+                  :style="{ left: peopleCountBadgePosition.left + '%', top: peopleCountBadgePosition.top + '%' }"
+                >
+                  <VIcon icon="tabler-users" size="20" class="me-2" />
+                  <span class="text-h5 font-weight-bold">{{ floorPlanPeopleCount ?? '—' }}</span>
+                  <span class="text-body-2 ms-1">คน</span>
                 </div>
 
                 <!-- Area Device Icons Overlay — แสดง icon ไฟ/แอร์/ERV บน floor plan ตามตำแหน่ง x,y จากอุปกรณ์ area_id -->
@@ -6938,6 +7005,20 @@ onBeforeUnmount(() => {
   height: 100%;
   pointer-events: none;
   z-index: 10;
+}
+
+.people-count-overlay-badge {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 22;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(var(--v-theme-primary), 0.92);
+  color: rgb(var(--v-theme-on-primary));
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
 }
 
 .area-box {
